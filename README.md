@@ -49,6 +49,10 @@ npm run dev        # http://localhost:5173  (proxies /api -> :8000)
 ```
 
 Enter a local path in the dashboard, pick a mode (All / Security / Logic), and scan.
+Results **stream in live** (per-file progress bar + findings as they're found); a
+**Stop** button cancels mid-scan and keeps partial results. Finished scans are kept
+in a **history** row (client-side `localStorage`) so you can switch between them, and
+findings can be filtered by severity. The header shows the active provider/model.
 
 ## How it works
 
@@ -57,7 +61,7 @@ Enter a local path in the dashboard, pick a mode (All / Security / Logic), and s
 - `bughunter/analyzer.py` sends each file to `claude-opus-4-8` with **schema-enforced
   JSON output** (`output_config.format`) and adaptive thinking, over AsyncAnthropic
   streaming — so responses are always valid JSON. Files are analysed concurrently
-  (5 at a time).
+  (`SCAN_CONCURRENCY`, default 5). `scan_stream` yields per-file events for the live UI.
 - Findings are sorted by severity and aggregated into a summary.
 
 ## Notes

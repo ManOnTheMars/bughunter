@@ -6,12 +6,13 @@ selected by the PROVIDER env var; see provider.py.
 """
 import asyncio
 import json
+import os
 
 from .provider import complete_findings
 from .schemas import Finding, ScanResult, ScanSummary, SEVERITY_ORDER
 from .scanner import collect_files, CollectedFile
 
-MAX_CONCURRENCY = 5
+MAX_CONCURRENCY = int(os.getenv("SCAN_CONCURRENCY", "5"))
 
 SYSTEM_PROMPT = """You are an elite code auditor combining two specialties:
 a security researcher (OWASP, CWE) and a senior engineer hunting correctness bugs.
@@ -73,6 +74,29 @@ async def analyze_file(cf: CollectedFile, categories: list[str]) -> list[Finding
     return [Finding(file=cf.rel, **item) for item in raw]
 
 
+def _build_result(
+    findings: list[Finding], root: str, files_scanned: int, files_skipped: int
+) -> ScanResult:
+    """Sort findings and assemble the summary + result (shared by both paths)."""
+    findings = sorted(findings, key=lambda f: (SEVERITY_ORDER[f.severity], f.file, f.line))
+
+    by_sev = {s: 0 for s in ("Critical", "High", "Medium", "Low")}
+    by_cat = {c: 0 for c in ("Security", "Logic")}
+    for f in findings:
+        by_sev[f.severity] += 1
+        by_cat[f.category] += 1
+
+    summary = ScanSummary(
+        root=str(root),
+        files_scanned=files_scanned,
+        files_skipped=files_skipped,
+        total_findings=len(findings),
+        by_severity=by_sev,
+        by_category=by_cat,
+    )
+    return ScanResult(summary=summary, findings=findings)
+
+
 async def scan_path(
     root: str,
     categories: list[str] | None = None,
@@ -101,21 +125,64 @@ async def scan_path(
                 progress(cf.rel, done, total=len(files), found=len(result))
 
     await asyncio.gather(*(run(cf) for cf in files))
+    return _build_result(findings, root, len(files), skipped)
 
-    findings.sort(key=lambda f: (SEVERITY_ORDER[f.severity], f.file, f.line))
 
-    by_sev = {s: 0 for s in ("Critical", "High", "Medium", "Low")}
-    by_cat = {c: 0 for c in ("Security", "Logic")}
-    for f in findings:
-        by_sev[f.severity] += 1
-        by_cat[f.category] += 1
+async def scan_stream(
+    root: str,
+    categories: list[str] | None = None,
+    max_files: int | None = None,
+    is_disconnected=None,
+):
+    """Async generator yielding scan events as they happen.
 
-    summary = ScanSummary(
-        root=str(root),
-        files_scanned=len(files),
-        files_skipped=skipped,
-        total_findings=len(findings),
-        by_severity=by_sev,
-        by_category=by_cat,
-    )
-    return ScanResult(summary=summary, findings=findings)
+    Events (dicts): "meta" (once, up front), "finding" (per finding as it
+    completes), "progress" (per file), and "done" (once, with the final summary).
+    Files run concurrently under a semaphore; results are consumed via a queue so
+    findings stream out the moment each file finishes. If ``is_disconnected()``
+    becomes true, remaining work is cancelled — useful for a client "Stop".
+    """
+    categories = categories or ["Security", "Logic"]
+    files, skipped = collect_files(root, max_files)
+    yield {"type": "meta", "root": str(root), "total": len(files), "files_skipped": skipped}
+
+    sem = asyncio.Semaphore(MAX_CONCURRENCY)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def run(cf: CollectedFile):
+        async with sem:
+            try:
+                result = await analyze_file(cf, categories)
+                await queue.put((cf.rel, result, None))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # one bad file shouldn't kill the scan
+                await queue.put((cf.rel, [], str(e)))
+
+    tasks = [asyncio.create_task(run(cf)) for cf in files]
+    findings: list[Finding] = []
+    done = 0
+    try:
+        for _ in range(len(files)):
+            rel, result, err = await queue.get()
+            done += 1
+            for f in result:
+                findings.append(f)
+                yield {"type": "finding", "finding": f.model_dump()}
+            yield {
+                "type": "progress",
+                "done": done, "total": len(files),
+                "file": rel, "found": len(result), "error": err,
+            }
+            if is_disconnected is not None and await is_disconnected():
+                break
+    finally:
+        for t in tasks:
+            t.cancel()
+
+    result = _build_result(findings, root, len(files), skipped)
+    yield {
+        "type": "done",
+        "summary": result.summary.model_dump(),
+        "findings": [f.model_dump() for f in result.findings],
+    }
