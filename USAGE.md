@@ -128,6 +128,17 @@ python -m bughunter.cli web https://api.miний-сайт.mn --header "Authoriza
 python -m bughunter.cli web https://miний-сайт.mn --basic "admin:нууцүг"
 ```
 
+**Гар аргаар оруулахгүйгээр — браузерынхаа session-ийг шууд ашиглах:** `--browser`
+сонгвол тухайн сайтад нэвтэрсэн cookie-г локал браузераас автоматаар авна.
+```powershell
+python -m bughunter.cli web https://app.miний-сайт.mn --browser firefox
+python -m bughunter.cli web https://app.miний-сайт.mn --browser auto    # аль ч браузер
+```
+> ⚠️ Орчин үеийн **Chrome/Edge** нь cookie-г шифрлэдэг (app-bound) тул Windows дээр
+> заримдаа **admin эрх** шаардана эсвэл уншиж чадахгүй. Тэр үед **Firefox** ашиглах
+> эсвэл cookie-г гар аргаар `--cookie`-оор оруул. Энэ нь зөвхөн **чиний өөрийн**
+> машин/браузерын session-ийг, **зөвшөөрөлтэй** сайтад ашиглах зорилготой.
+
 ### Хост скан (`host`) — TCP порт/service скан
 Стандарт TCP connect скан (`nmap -sT`-тэй адил) + banner унших. **Exploit хийхгүй.**
 - **Private/localhost** (127.0.0.1, 192.168.x, 10.x…) — шууд зөвшөөрөгдөнө.

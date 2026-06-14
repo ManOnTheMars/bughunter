@@ -16,8 +16,9 @@ local folder ─▶ scanner (collect source files) ─▶ Claude Opus (structure
 Four scan types, one findings model:
 - **Code** (`scan`) — LLM bug/vuln analysis of local source.
 - **Web** (`web`) — *non-intrusive* security-posture check of a URL (security
-  headers, cookie flags, TLS, info disclosure). Optional **authenticated scan**
-  (cookie/header/basic) for deeper, logged-in checks. No attack payloads.
+  headers, cookie flags, TLS, info disclosure). Optional **authenticated scan** —
+  paste a cookie/header/basic, or reuse a local browser's logged-in session
+  (`--browser`) so no manual copying is needed. No attack payloads.
 - **Host** (`host`) — standard TCP port/service scan of one host.
 - **Network** (`net`) — discover live hosts across a CIDR + port scan + OS guess
   (banner + ping-TTL heuristic, no raw sockets/admin).
@@ -45,7 +46,8 @@ python -m bughunter.cli scan ./src --verify --json findings.json   # 2nd pass: f
 
 # Web security posture (authorized targets only)
 python -m bughunter.cli web https://example.com
-python -m bughunter.cli web https://app.example.com --cookie "session=abc"   # authenticated
+python -m bughunter.cli web https://app.example.com --cookie "session=abc"   # authenticated (manual)
+python -m bughunter.cli web https://app.example.com --browser firefox         # reuse browser session
 
 # TCP port/service scan (private targets ok; public needs --authorized)
 python -m bughunter.cli host 127.0.0.1

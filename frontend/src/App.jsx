@@ -185,6 +185,7 @@ export default function App() {
   const [cookie, setCookie] = useState('')
   const [authHeader, setAuthHeader] = useState('')   // "Key: Value"
   const [basic, setBasic] = useState('')             // "user:pass"
+  const [browser, setBrowser] = useState('none')     // reuse local browser session
   const [mode, setMode] = useState('all')
   const [maxFiles, setMaxFiles] = useState(40)
   const [running, setRunning] = useState(false)
@@ -296,6 +297,7 @@ export default function App() {
         cookie: cookie.trim() || null,
         basic: basic.trim() || null,
         headers: Object.keys(headers).length ? headers : null,
+        browser: browser !== 'none' ? browser : null,
       }
     } else if (scanType === 'net') {
       body = { cidr: t, authorized, quick }
@@ -470,13 +472,32 @@ export default function App() {
                     </button>
                   </div>
                   {showAuth && (
-                    <div className="grid sm:grid-cols-3 gap-2 pt-1">
-                      <input className="input num text-xs" placeholder="Cookie: session=abc"
-                        value={cookie} onChange={(e) => setCookie(e.target.value)} aria-label="Cookie" />
-                      <input className="input num text-xs" placeholder="Header: Authorization: Bearer …"
-                        value={authHeader} onChange={(e) => setAuthHeader(e.target.value)} aria-label="Header" />
-                      <input className="input num text-xs" placeholder="Basic: user:pass"
-                        value={basic} onChange={(e) => setBasic(e.target.value)} aria-label="Basic auth" />
+                    <div className="space-y-2 pt-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-slate-400 shrink-0">Браузерын session ашиглах:</span>
+                        <select className="input text-xs py-1" value={browser}
+                          onChange={(e) => setBrowser(e.target.value)} aria-label="Browser session">
+                          <option value="none">— гар аргаар оруулна —</option>
+                          <option value="auto">Аль ч браузер (auto)</option>
+                          <option value="chrome">Chrome</option>
+                          <option value="edge">Edge</option>
+                          <option value="firefox">Firefox</option>
+                          <option value="brave">Brave</option>
+                          <option value="opera">Opera</option>
+                        </select>
+                      </div>
+                      <p className="text-[11px] text-slate-600">
+                        Браузер сонгвол тухайн сайтад нэвтэрсэн cookie-г автоматаар авна (гар аргаар хуулахгүй).
+                        Орчин үеийн Chrome/Edge нь cookie-г шифрлэдэг тул заримдаа Firefox илүү найдвартай.
+                      </p>
+                      <div className="grid sm:grid-cols-3 gap-2">
+                        <input className="input num text-xs" placeholder="эсвэл Cookie: session=abc"
+                          value={cookie} onChange={(e) => setCookie(e.target.value)} aria-label="Cookie" />
+                        <input className="input num text-xs" placeholder="Header: Authorization: Bearer …"
+                          value={authHeader} onChange={(e) => setAuthHeader(e.target.value)} aria-label="Header" />
+                        <input className="input num text-xs" placeholder="Basic: user:pass"
+                          value={basic} onChange={(e) => setBasic(e.target.value)} aria-label="Basic auth" />
+                      </div>
                     </div>
                   )}
                 </>

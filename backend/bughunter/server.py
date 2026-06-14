@@ -47,6 +47,7 @@ class WebScanRequest(BaseModel):
     cookie: str | None = Field(default=None)
     headers: dict[str, str] | None = Field(default=None)
     basic: str | None = Field(default=None)
+    browser: str | None = Field(default=None)
 
 
 class HostScanRequest(BaseModel):
@@ -83,7 +84,7 @@ async def web(body: WebScanRequest):
     try:
         return await scan_web(
             body.url, ai=body.ai, headers=body.headers,
-            cookie=body.cookie, basic=body.basic,
+            cookie=body.cookie, basic=body.basic, browser=body.browser,
         )
     except Exception as e:
         logger.exception("Web scan failed")

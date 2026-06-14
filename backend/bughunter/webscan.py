@@ -75,6 +75,39 @@ async def _tls_not_after(host: str, port: int = 443) -> datetime | None:
             pass
 
 
+def _cookies_from_browser(browser: str, host: str) -> str | None:
+    """Pull cookies for `host` from a locally installed browser → Cookie header.
+
+    Lets the scan reuse your existing logged-in session without copying cookies
+    by hand. Reads only the target site's cookies from YOUR browser on YOUR
+    machine — scan authorized sites only.
+    """
+    import browser_cookie3 as bc3
+
+    loaders = {
+        "auto": bc3.load, "chrome": bc3.chrome, "firefox": bc3.firefox,
+        "edge": bc3.edge, "brave": bc3.brave, "chromium": bc3.chromium,
+        "opera": bc3.opera,
+    }
+    loader = loaders.get(browser.lower())
+    if loader is None:
+        raise ValueError(f"Unknown browser '{browser}'. Use one of: {', '.join(loaders)}")
+
+    parts = (host or "").split(".")
+    base = ".".join(parts[-2:]) if len(parts) >= 2 else host
+    try:
+        jar = loader(domain_name=base)
+    except Exception as e:  # locked DB, app-bound encryption (modern Chrome/Edge), no browser
+        raise RuntimeError(
+            f"Couldn't read cookies from {browser} for '{base}': {e}. "
+            "Make sure you're logged into the site in that browser. Modern "
+            "Chrome/Edge encrypt cookies (app-bound) and may not be readable — "
+            "try --browser firefox, or paste the cookie manually."
+        ) from e
+    pairs = [f"{c.name}={c.value}" for c in jar if c.value]
+    return "; ".join(pairs) if pairs else None
+
+
 def _auth_kwargs(headers: dict | None, cookie: str | None, basic: str | None):
     """Build httpx client kwargs for an authenticated (logged-in) scan."""
     hdrs = {"User-Agent": USER_AGENT}
@@ -90,14 +123,19 @@ def _auth_kwargs(headers: dict | None, cookie: str | None, basic: str | None):
 
 
 async def collect_web_evidence(
-    url: str, headers: dict | None = None, cookie: str | None = None, basic: str | None = None
+    url: str, headers: dict | None = None, cookie: str | None = None,
+    basic: str | None = None, browser: str | None = None,
 ) -> dict:
     """Fetch the URL (following redirects) and return raw, non-intrusive evidence.
 
-    If auth (headers/cookie/basic) is supplied, the request is made as the
-    logged-in user so the posture check covers authenticated responses too.
+    If auth (headers/cookie/basic) is supplied — or `browser` is set to reuse a
+    local browser's logged-in session — the request is made as the logged-in
+    user so the posture check covers authenticated responses too.
     """
     url = _normalize(url)
+    if browser and not cookie:
+        host = urlparse(url).hostname or ""
+        cookie = _cookies_from_browser(browser, host)
     hdrs, auth = _auth_kwargs(headers, cookie, basic)
     async with httpx.AsyncClient(
         follow_redirects=True, timeout=15.0,
@@ -247,14 +285,15 @@ async def _ai_findings(ev: dict, url: str) -> list[Finding]:
 
 async def scan_web(
     url: str, ai: bool = False, headers: dict | None = None,
-    cookie: str | None = None, basic: str | None = None,
+    cookie: str | None = None, basic: str | None = None, browser: str | None = None,
 ) -> ScanResult:
     """Scan a single URL's security posture. Set ai=True for LLM enrichment.
 
-    Pass headers/cookie/basic to scan as a logged-in user (deeper, authenticated
-    checks). Authorized targets only.
+    Pass headers/cookie/basic — or `browser` to reuse a local browser's logged-in
+    session — to scan as a logged-in user (deeper, authenticated checks).
+    Authorized targets only.
     """
-    ev = await collect_web_evidence(url, headers=headers, cookie=cookie, basic=basic)
+    ev = await collect_web_evidence(url, headers=headers, cookie=cookie, basic=basic, browser=browser)
     findings = _rule_findings(ev)
     if ai:
         try:

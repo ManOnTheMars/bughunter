@@ -17,7 +17,8 @@ backend/bughunter/
                 #   optional verify pass drops false positives (SCAN_VERIFY / verify=True)
   webscan.py    # non-intrusive web posture scan (headers/cookies/TLS/info) → Finding[];
                 #   rule-based + optional LLM enrichment; optional authenticated scan
-                #   (cookie/header/basic). NO attack payloads.
+                #   (cookie/header/basic, or browser= to reuse a local browser session
+                #   via browser_cookie3). NO attack payloads.
   hostscan.py   # TCP connect port/service scan → Finding[]; authorization gate
                 #   (private/loopback only unless authorized=True). NO exploitation.
   netscan.py    # CIDR host discovery + port scan + OS guess (banner + ping TTL

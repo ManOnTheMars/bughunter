@@ -85,6 +85,9 @@ def main(argv=None) -> int:
     wc.add_argument("--header", action="append", default=[], metavar="K:V",
                     help="Extra request header (repeatable), e.g. \"Authorization: Bearer ...\"")
     wc.add_argument("--basic", metavar="USER:PASS", help="HTTP Basic auth credentials")
+    wc.add_argument("--browser", metavar="NAME",
+                    help="Reuse a logged-in session from a local browser "
+                         "(auto|chrome|firefox|edge|brave|chromium|opera) — no manual cookie")
     wc.add_argument("--json", dest="json_out", metavar="FILE", help="Also write findings as JSON")
 
     nc = sub.add_parser("net", help="Discover live hosts in a network + OS guess (authorized only)")
@@ -132,7 +135,7 @@ def main(argv=None) -> int:
             print(_c("dim", f"  Scanning {args.url} …"), file=sys.stderr)
             result = asyncio.run(scan_web(
                 args.url, ai=args.ai, headers=headers or None,
-                cookie=args.cookie, basic=args.basic,
+                cookie=args.cookie, basic=args.basic, browser=args.browser,
             ))
 
         elif args.cmd == "net":
