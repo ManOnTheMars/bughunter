@@ -67,6 +67,10 @@ npm run dev
    - **Аюулгүй байдал** — зөвхөн security
    - **Логик алдаа** — зөвхөн logic
 4. Файлын дээд тоо (default 40) тохируул.
+   - 💡 **Локал зам байхгүй бол:** Код таб дээрх **"Zip оруулах"** дарж source code-оо
+     `.zip` болгож оруулна. Сервер түр хавтсанд задлаад скан хийж, дараа нь **устгана**
+     (макс 60MB; zip-slip / zip-bomb-оос хамгаалсан). *Тэмдэглэл: zip скан нь live
+     progress-гүй — дуустал spinner харагдана.*
 5. **Шинжлэх** дар. Үр дүн **шууд урсаж** харагдана:
    - Дээд талд **progress bar** (хийгдсэн/нийт файл, %) + одоо шинжилж буй файл.
    - Олдсон асуудлууд бэлэн болмогц нэг нэгээр нэмэгдэнэ (бүх скан дуустал хүлээхгүй).
@@ -275,8 +279,9 @@ backend/bughunter/
   webscan.py    # веб байдал шалгах (header/cookie/TLS) — intrusive биш; authenticated сонголт
   hostscan.py   # TCP порт/service скан — зөвшөөрлийн хаалгатай
   netscan.py    # CIDR host discovery + порт + OS таамаг (banner+TTL) — зөвшөөрлийн хаалгатай
+  uploads.py    # .zip source аюулгүй задлах (POST /scan/upload) — zip-slip/zip-bomb хамгаалалт
   cli.py        # `python -m bughunter.cli {scan|web|host|net} <target>` — өнгөт тайлан
-  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE), POST /web, POST /host, POST /net, GET /health
+  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE), POST /scan/upload (.zip), POST /web, POST /host, POST /net, GET /health
 frontend/       # React + Vite + Tailwind dashboard (/api -> :8000 proxy), Код/Веб/Хост/Сүлжээ таб
 ```
 

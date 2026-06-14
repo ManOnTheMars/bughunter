@@ -2,7 +2,7 @@
 import json
 import logging
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -12,6 +12,7 @@ from .hostscan import scan_host
 from .netscan import scan_network
 from .provider import PROVIDER, label
 from .schemas import ScanResult
+from .uploads import MAX_ZIP_BYTES, cleanup_upload, extract_zip
 from .webscan import scan_web
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,34 @@ async def scan(body: ScanRequest):
     except Exception as e:
         logger.exception("Scan failed")
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/scan/upload", response_model=ScanResult)
+async def scan_upload(
+    file: UploadFile = File(...),
+    mode: str = Query("all"),
+    max_files: int | None = Query(80, ge=1, le=500),
+    verify: bool = Query(False),
+):
+    """Scan an uploaded source-code .zip. Extracted to a temp dir, scanned, deleted."""
+    if not (file.filename or "").lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Please upload a .zip archive.")
+    data = await file.read(MAX_ZIP_BYTES + 1)
+    if len(data) > MAX_ZIP_BYTES:
+        raise HTTPException(status_code=413, detail=f"Zip too large (> {MAX_ZIP_BYTES // 1024 // 1024} MB).")
+    try:
+        root, _ = extract_zip(data, file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        result = await scan_path(root, _categories(mode), max_files, verify=verify)
+    except Exception as e:
+        logger.exception("Upload scan failed")
+        raise HTTPException(status_code=502, detail=str(e))
+    finally:
+        cleanup_upload(root)
+    result.summary.root = file.filename  # friendly label instead of the temp path
+    return result
 
 
 @app.post("/web", response_model=ScanResult)

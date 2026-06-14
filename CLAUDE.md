@@ -23,14 +23,16 @@ backend/bughunter/
                 #   (private/loopback only unless authorized=True). NO exploitation.
   netscan.py    # CIDR host discovery + port scan + OS guess (banner + ping TTL
                 #   heuristic, no raw sockets/admin) → Finding[]; same auth gate.
+  uploads.py    # safe .zip extraction for POST /scan/upload — zip-slip + zip-bomb
+                #   guards, size/entry caps; only deletes paths under UPLOAD_ROOT.
   provider.py   # LLM backend switch: Anthropic (cloud) | Ollama (local)
   schemas.py    # Finding/ScanResult models + the JSON schema the model is bound to
   cli.py        # `python -m bughunter.cli {scan|web|host} <target>` — colored report
-  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE), POST /web, POST /host,
-                #   POST /net, GET /health
+  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE), POST /scan/upload (.zip),
+                #   POST /web, POST /host, POST /net, GET /health
 frontend/       # React + Vite + Tailwind dashboard (proxies /api -> :8000)
-                #   Code/Web/Host/Network scan tabs, EventSource live progress,
-                #   severity filter, localStorage scan history
+                #   Code/Web/Host/Network scan tabs (+ .zip upload), live progress,
+                #   severity filter, history tab (type filter + scan diff)
 ```
 
 ## Providers (provider.py)

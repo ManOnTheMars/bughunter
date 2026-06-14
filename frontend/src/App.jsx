@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import {
   Bug, ShieldAlert, Search, FolderSearch, Loader2, FileCode,
   ChevronDown, CheckCircle2, AlertTriangle, Square, Plus, History,
-  Globe, Server, Network, Lock, X, Trash2, GitCompare, ScanLine,
+  Globe, Server, Network, Lock, X, Trash2, GitCompare, ScanLine, Upload,
 } from 'lucide-react'
 
 const SEVERITY = {
@@ -574,6 +574,32 @@ export default function App() {
     }
   }
 
+  // Upload a source .zip and scan it (non-streaming; server extracts → scans → cleans up)
+  async function uploadScan(file) {
+    if (!file || running) return
+    closeStream()
+    setRunning(true); setError(null); setLiveFindings([]); setActiveId(null); setSevFilter('All'); setProgress(null)
+    const qs = new URLSearchParams({ mode, max_files: String(Number(maxFiles)) })
+    const fd = new FormData()
+    fd.append('file', file)
+    try {
+      const r = await fetch('/api/scan/upload?' + qs, { method: 'POST', body: fd })
+      if (!r.ok) {
+        let detail = `Алдаа (${r.status})`
+        try { detail = (await r.json()).detail || detail } catch { /* keep */ }
+        throw new Error(detail)
+      }
+      const result = await r.json()
+      finishScan({
+        id: `${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+        path: file.name, mode, ts: Date.now(), result,
+      })
+    } catch (e) {
+      setError(e.message || 'Backend ажиллахгүй байна (port 8000)')
+      setRunning(false)
+    }
+  }
+
   function start() {
     if (scanType === 'code') scan()
     else runPostScan()
@@ -673,6 +699,7 @@ export default function App() {
           </div>
 
           {scanType === 'code' ? (
+            <div className="space-y-2">
             <div className="flex flex-col md:flex-row gap-2">
               <input
                 className="input flex-1 num"
@@ -710,6 +737,21 @@ export default function App() {
                   <Search size={15} /> Шинжлэх
                 </button>
               )}
+            </div>
+            {/* Zip upload — scan source code without a local path */}
+            <div className="flex items-center gap-2 text-xs text-slate-500 flex-wrap">
+              <span>эсвэл</span>
+              <label className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-surface-600/60 transition-colors ${
+                running ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer text-slate-300 hover:text-slate-100 hover:border-surface-500'
+              }`}>
+                <Upload size={14} /> Zip оруулах
+                <input
+                  type="file" accept=".zip,application/zip" className="hidden" disabled={running}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadScan(f); e.target.value = '' }}
+                />
+              </label>
+              <span className="text-slate-600">source code-оо .zip болгож оруулаад скан хийнэ (макс 60MB)</span>
+            </div>
             </div>
           ) : (
             <div className="space-y-2">

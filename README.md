@@ -74,7 +74,8 @@ npm install
 npm run dev        # http://localhost:5173  (proxies /api -> :8000)
 ```
 
-Enter a local path in the dashboard, pick a mode (All / Security / Logic), and scan.
+Enter a local path in the dashboard (or **upload a source `.zip`** — extracted to a
+temp dir, scanned, then deleted), pick a mode (All / Security / Logic), and scan.
 Results **stream in live** (per-file progress bar + findings as they're found); a
 **Stop** button cancels mid-scan and keeps partial results. Finished scans are kept
 in a **history** row (client-side `localStorage`) so you can switch between them, and
