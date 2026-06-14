@@ -13,13 +13,19 @@ in local codebases. CLI + web dashboard over a shared analysis engine.
 backend/bughunter/
   scanner.py    # collect source files from a local path (ignores, size limits)
   analyzer.py   # scan_path (one-shot ScanResult) + scan_stream (async event generator);
-                #   per-file analysis → Finding[], concurrent (SCAN_CONCURRENCY, default 5)
+                #   per-file analysis → Finding[], concurrent (SCAN_CONCURRENCY, default 5);
+                #   optional verify pass drops false positives (SCAN_VERIFY / verify=True)
+  webscan.py    # non-intrusive web posture scan (headers/cookies/TLS/info) → Finding[];
+                #   rule-based + optional LLM enrichment. NO attack payloads.
+  hostscan.py   # TCP connect port/service scan → Finding[]; authorization gate
+                #   (private/loopback only unless authorized=True). NO exploitation.
   provider.py   # LLM backend switch: Anthropic (cloud) | Ollama (local)
   schemas.py    # Finding/ScanResult models + the JSON schema the model is bound to
-  cli.py        # `python -m bughunter.cli scan <path>` — colored terminal report
-  server.py     # FastAPI: POST /scan -> ScanResult; GET /scan/stream -> SSE (live); GET /health
+  cli.py        # `python -m bughunter.cli {scan|web|host} <target>` — colored report
+  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE), POST /web, POST /host, GET /health
 frontend/       # React + Vite + Tailwind dashboard (proxies /api -> :8000)
-                #   EventSource live progress, severity filter, localStorage scan history
+                #   Code/Web/Host scan tabs, EventSource live progress, severity
+                #   filter, localStorage scan history
 ```
 
 ## Providers (provider.py)
@@ -40,6 +46,14 @@ Do not regress: schema objects use `additionalProperties:false` + explicit `requ
 the Anthropic client is **lazy** (only instantiated when PROVIDER=anthropic) so the
 server/CLI import cleanly in Ollama mode without a key. One file = one request;
 concurrency bounded by a semaphore in `analyzer.py`.
+
+Safety (web/host scans are dual-use — keep these guarantees):
+- `webscan.py` is **non-intrusive**: it only reads what a normal HTTP GET returns
+  (headers/cookies/TLS/body). No payloads, fuzzing, brute-force, or exploitation.
+- `hostscan.py` does a standard TCP **connect** scan only (no exploitation). The
+  authorization gate (`_is_private` / `authorized=True`) must stay: public targets
+  require explicit acknowledgement. CLI surfaces it as `--authorized`; API as
+  `authorized:true` (403 otherwise). Do not weaken these into auto-allow.
 
 ## Stack
 

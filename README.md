@@ -13,6 +13,13 @@ Two interfaces share one engine:
 local folder ─▶ scanner (collect source files) ─▶ Claude Opus (structured JSON) ─▶ findings
 ```
 
+Three scan types, one findings model:
+- **Code** (`scan`) — LLM bug/vuln analysis of local source.
+- **Web** (`web`) — *non-intrusive* security-posture check of a URL (security
+  headers, cookie flags, TLS, info disclosure). No attack payloads.
+- **Host** (`host`) — standard TCP port/service scan. **Authorized targets only**;
+  public hosts require explicit `--authorized` / `authorized:true`.
+
 ## Setup
 
 ### Backend
@@ -29,7 +36,14 @@ copy .env.example .env      # then add your ANTHROPIC_API_KEY
 cd backend
 python -m bughunter.cli scan ../some-project
 python -m bughunter.cli scan ./app --security-only --max-files 30
-python -m bughunter.cli scan ./src --json findings.json
+python -m bughunter.cli scan ./src --verify --json findings.json   # 2nd pass: fewer false positives
+
+# Web security posture (authorized targets only)
+python -m bughunter.cli web https://example.com
+
+# TCP port/service scan (private targets ok; public needs --authorized)
+python -m bughunter.cli host 127.0.0.1
+python -m bughunter.cli host scanme.example.com --authorized --ports 22,80,443
 ```
 
 Exit code is non-zero when any **Critical** or **High** finding exists — drop it into a
