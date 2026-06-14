@@ -13,12 +13,17 @@ Two interfaces share one engine:
 local folder ─▶ scanner (collect source files) ─▶ Claude Opus (structured JSON) ─▶ findings
 ```
 
-Three scan types, one findings model:
+Four scan types, one findings model:
 - **Code** (`scan`) — LLM bug/vuln analysis of local source.
 - **Web** (`web`) — *non-intrusive* security-posture check of a URL (security
-  headers, cookie flags, TLS, info disclosure). No attack payloads.
-- **Host** (`host`) — standard TCP port/service scan. **Authorized targets only**;
-  public hosts require explicit `--authorized` / `authorized:true`.
+  headers, cookie flags, TLS, info disclosure). Optional **authenticated scan**
+  (cookie/header/basic) for deeper, logged-in checks. No attack payloads.
+- **Host** (`host`) — standard TCP port/service scan of one host.
+- **Network** (`net`) — discover live hosts across a CIDR + port scan + OS guess
+  (banner + ping-TTL heuristic, no raw sockets/admin).
+
+Host and network scans are **authorized targets only** — public ranges require
+explicit `--authorized` / `authorized:true`. No exploitation, ever.
 
 ## Setup
 
@@ -40,10 +45,15 @@ python -m bughunter.cli scan ./src --verify --json findings.json   # 2nd pass: f
 
 # Web security posture (authorized targets only)
 python -m bughunter.cli web https://example.com
+python -m bughunter.cli web https://app.example.com --cookie "session=abc"   # authenticated
 
 # TCP port/service scan (private targets ok; public needs --authorized)
 python -m bughunter.cli host 127.0.0.1
 python -m bughunter.cli host scanme.example.com --authorized --ports 22,80,443
+
+# Network discovery + OS guess across a CIDR (private ok; public needs --authorized)
+python -m bughunter.cli net 192.168.1.0/24
+python -m bughunter.cli net 192.168.1.0/24 --quick
 ```
 
 Exit code is non-zero when any **Critical** or **High** finding exists — drop it into a

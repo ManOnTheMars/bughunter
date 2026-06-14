@@ -7,6 +7,7 @@ import sys
 
 from .analyzer import scan_path
 from .hostscan import scan_host
+from .netscan import scan_network
 from .provider import PROVIDER
 from .schemas import ScanResult
 from .webscan import scan_web
@@ -80,7 +81,18 @@ def main(argv=None) -> int:
     wc = sub.add_parser("web", help="Non-intrusive web security posture scan of a URL")
     wc.add_argument("url", help="Target URL (e.g. https://example.com) — authorized targets only")
     wc.add_argument("--ai", action="store_true", help="Add LLM enrichment of the response")
+    wc.add_argument("--cookie", help="Cookie header for an authenticated scan, e.g. \"session=abc\"")
+    wc.add_argument("--header", action="append", default=[], metavar="K:V",
+                    help="Extra request header (repeatable), e.g. \"Authorization: Bearer ...\"")
+    wc.add_argument("--basic", metavar="USER:PASS", help="HTTP Basic auth credentials")
     wc.add_argument("--json", dest="json_out", metavar="FILE", help="Also write findings as JSON")
+
+    nc = sub.add_parser("net", help="Discover live hosts in a network + OS guess (authorized only)")
+    nc.add_argument("cidr", help="CIDR range, e.g. 192.168.1.0/24. Public ranges require --authorized")
+    nc.add_argument("--authorized", action="store_true",
+                    help="Confirm you are authorized to scan a non-private range")
+    nc.add_argument("--quick", action="store_true", help="Probe only common ports (faster)")
+    nc.add_argument("--json", dest="json_out", metavar="FILE", help="Also write findings as JSON")
 
     hc = sub.add_parser("host", help="TCP port/service scan of a host (authorized targets only)")
     hc.add_argument("host", help="Host or IP. Public targets require --authorized")
@@ -112,8 +124,22 @@ def main(argv=None) -> int:
             if args.ai and _needs_key():
                 _no_key_msg()
                 return 2
+            headers = {}
+            for h in args.header:
+                if ":" in h:
+                    k, _, v = h.partition(":")
+                    headers[k.strip()] = v.strip()
             print(_c("dim", f"  Scanning {args.url} …"), file=sys.stderr)
-            result = asyncio.run(scan_web(args.url, ai=args.ai))
+            result = asyncio.run(scan_web(
+                args.url, ai=args.ai, headers=headers or None,
+                cookie=args.cookie, basic=args.basic,
+            ))
+
+        elif args.cmd == "net":
+            print(_c("dim", f"  Sweeping {args.cidr} …"), file=sys.stderr)
+            result = asyncio.run(scan_network(
+                args.cidr, authorized=args.authorized, full_ports=not args.quick,
+            ))
 
         elif args.cmd == "host":
             ports = None

@@ -16,16 +16,20 @@ backend/bughunter/
                 #   per-file analysis → Finding[], concurrent (SCAN_CONCURRENCY, default 5);
                 #   optional verify pass drops false positives (SCAN_VERIFY / verify=True)
   webscan.py    # non-intrusive web posture scan (headers/cookies/TLS/info) → Finding[];
-                #   rule-based + optional LLM enrichment. NO attack payloads.
+                #   rule-based + optional LLM enrichment; optional authenticated scan
+                #   (cookie/header/basic). NO attack payloads.
   hostscan.py   # TCP connect port/service scan → Finding[]; authorization gate
                 #   (private/loopback only unless authorized=True). NO exploitation.
+  netscan.py    # CIDR host discovery + port scan + OS guess (banner + ping TTL
+                #   heuristic, no raw sockets/admin) → Finding[]; same auth gate.
   provider.py   # LLM backend switch: Anthropic (cloud) | Ollama (local)
   schemas.py    # Finding/ScanResult models + the JSON schema the model is bound to
   cli.py        # `python -m bughunter.cli {scan|web|host} <target>` — colored report
-  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE), POST /web, POST /host, GET /health
+  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE), POST /web, POST /host,
+                #   POST /net, GET /health
 frontend/       # React + Vite + Tailwind dashboard (proxies /api -> :8000)
-                #   Code/Web/Host scan tabs, EventSource live progress, severity
-                #   filter, localStorage scan history
+                #   Code/Web/Host/Network scan tabs, EventSource live progress,
+                #   severity filter, localStorage scan history
 ```
 
 ## Providers (provider.py)
@@ -47,13 +51,17 @@ the Anthropic client is **lazy** (only instantiated when PROVIDER=anthropic) so 
 server/CLI import cleanly in Ollama mode without a key. One file = one request;
 concurrency bounded by a semaphore in `analyzer.py`.
 
-Safety (web/host scans are dual-use — keep these guarantees):
+Safety (web/host/net scans are dual-use — keep these guarantees):
 - `webscan.py` is **non-intrusive**: it only reads what a normal HTTP GET returns
-  (headers/cookies/TLS/body). No payloads, fuzzing, brute-force, or exploitation.
-- `hostscan.py` does a standard TCP **connect** scan only (no exploitation). The
-  authorization gate (`_is_private` / `authorized=True`) must stay: public targets
-  require explicit acknowledgement. CLI surfaces it as `--authorized`; API as
-  `authorized:true` (403 otherwise). Do not weaken these into auto-allow.
+  (headers/cookies/TLS/body), including in authenticated mode (it just sends the
+  supplied cookie/header/credentials like a browser). No payloads, fuzzing,
+  brute-force, or exploitation.
+- `hostscan.py` / `netscan.py` do standard TCP **connect** scans only (plus the
+  system `ping` for TTL in netscan — no raw sockets, no admin, no exploitation).
+  The authorization gate (`_is_private` / `authorized=True`) must stay on both:
+  public targets require explicit acknowledgement. CLI surfaces it as
+  `--authorized`; API as `authorized:true` (403 otherwise). netscan also caps the
+  sweep at MAX_HOSTS. Do not weaken these into auto-allow.
 
 ## Stack
 

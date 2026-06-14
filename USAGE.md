@@ -120,6 +120,14 @@ python -m bughunter.cli web https://example.com
 python -m bughunter.cli web https://miний-сайт.mn --ai   # LLM нэмэлт шинжилгээ
 ```
 
+**Нэвтэрсэн төлөвт гүн шалгах (authenticated):** cookie/header/credentials оруулбал
+браузер шиг нэвтэрсэн төлөвт хүсэлт явуулж, нэвтэрсэн хуудаснуудыг шалгана (intrusive биш).
+```powershell
+python -m bughunter.cli web https://app.miний-сайт.mn --cookie "session=abc123"
+python -m bughunter.cli web https://api.miний-сайт.mn --header "Authorization: Bearer TOKEN"
+python -m bughunter.cli web https://miний-сайт.mn --basic "admin:нууцүг"
+```
+
 ### Хост скан (`host`) — TCP порт/service скан
 Стандарт TCP connect скан (`nmap -sT`-тэй адил) + banner унших. **Exploit хийхгүй.**
 - **Private/localhost** (127.0.0.1, 192.168.x, 10.x…) — шууд зөвшөөрөгдөнө.
@@ -131,8 +139,23 @@ python -m bughunter.cli host миний-сервер.mn --authorized
 ```
 Нээлттэй эрсдэлтэй порт (Telnet, ил DB, Docker API, RDP…)-ыг severity-тэйгээр илрүүлнэ.
 
+### Сүлжээ скан (`net`) — амьд host олох + OS таамаглах
+CIDR range доторх **бүх амьд host**-ыг олж, тус бүрийн нээлттэй порт/service болон
+**OS таамаг** (SSH/HTTP banner + `ping` TTL heuristic)-ийг гаргана. Raw socket /
+admin шаардахгүй, exploit хийхгүй. `nmap -sn` / `nmap -O`-той төстэй recon.
+```powershell
+python -m bughunter.cli net 192.168.1.0/24
+python -m bughunter.cli net 192.168.1.0/24 --quick        # зөвхөн түгээмэл портууд (хурдан)
+python -m bughunter.cli net 10.0.0.0/24 --authorized      # public/гадны range
+```
+- **Private/localhost** (192.168.x, 10.x, 127.x…) — шууд зөвшөөрөгдөнө.
+- **Public range** — `--authorized` тугтайгаар л.
+- ⚠️ OS таамаг бол **heuristic** — banner хуурамч байж болно, TTL зөвхөн ерөнхий
+  чиглэл өгнө. Найдвартай OS detection бол `nmap -O` (raw packet) хэрэгтэй.
+
 ### Web UI-аас
-Дээд талын **Код / Веб / Хост** таб сонгоод target оруулна. Хост дээр public бол
+Дээд талын **Код / Веб / Хост / Сүлжээ** таб сонгоод target оруулна. Веб дээр
+"Нэвтрэлт" дарж cookie/header/credentials оруулж болно. Хост/сүлжээ дээр public бол
 "зөвшөөрөлтэй" чек тавина. Үр дүн ижил байдлаар severity-ээр харагдана.
 
 ---
@@ -234,11 +257,12 @@ backend/bughunter/
   analyzer.py   # файл бүрийг загварт явуулж бүтэцлэгдсэн Finding[] цуглуулна (concurrent)
   provider.py   # LLM backend switch: Anthropic (cloud) | Ollama (локал)
   schemas.py    # Finding/ScanResult загвар + JSON schema
-  webscan.py    # веб байдал шалгах (header/cookie/TLS) — intrusive биш
+  webscan.py    # веб байдал шалгах (header/cookie/TLS) — intrusive биш; authenticated сонголт
   hostscan.py   # TCP порт/service скан — зөвшөөрлийн хаалгатай
-  cli.py        # `python -m bughunter.cli {scan|web|host} <target>` — өнгөт тайлан
-  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE), POST /web, POST /host, GET /health
-frontend/       # React + Vite + Tailwind dashboard (/api -> :8000 proxy), Код/Веб/Хост таб
+  netscan.py    # CIDR host discovery + порт + OS таамаг (banner+TTL) — зөвшөөрлийн хаалгатай
+  cli.py        # `python -m bughunter.cli {scan|web|host|net} <target>` — өнгөт тайлан
+  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE), POST /web, POST /host, POST /net, GET /health
+frontend/       # React + Vite + Tailwind dashboard (/api -> :8000 proxy), Код/Веб/Хост/Сүлжээ таб
 ```
 
 `analyzer.py`-д `scan_path` (нэг удаагийн үр дүн, CLI/`POST /scan`-д) болон

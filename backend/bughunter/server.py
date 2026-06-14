@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from .analyzer import scan_path, scan_stream
 from .hostscan import scan_host
+from .netscan import scan_network
 from .provider import PROVIDER, label
 from .schemas import ScanResult
 from .webscan import scan_web
@@ -43,12 +44,21 @@ class ScanRequest(BaseModel):
 class WebScanRequest(BaseModel):
     url: str = Field(min_length=1)
     ai: bool = Field(default=False)
+    cookie: str | None = Field(default=None)
+    headers: dict[str, str] | None = Field(default=None)
+    basic: str | None = Field(default=None)
 
 
 class HostScanRequest(BaseModel):
     host: str = Field(min_length=1)
     ports: list[int] | None = Field(default=None)
     authorized: bool = Field(default=False)
+
+
+class NetScanRequest(BaseModel):
+    cidr: str = Field(min_length=1)
+    authorized: bool = Field(default=False)
+    quick: bool = Field(default=False)
 
 
 @app.get("/health")
@@ -71,9 +81,26 @@ async def scan(body: ScanRequest):
 async def web(body: WebScanRequest):
     """Non-intrusive web security posture scan. Authorized targets only."""
     try:
-        return await scan_web(body.url, ai=body.ai)
+        return await scan_web(
+            body.url, ai=body.ai, headers=body.headers,
+            cookie=body.cookie, basic=body.basic,
+        )
     except Exception as e:
         logger.exception("Web scan failed")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/net", response_model=ScanResult)
+async def net(body: NetScanRequest):
+    """Discover live hosts in a CIDR + OS guess. Public ranges require authorized=true."""
+    try:
+        return await scan_network(body.cidr, authorized=body.authorized, full_ports=not body.quick)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Net scan failed")
         raise HTTPException(status_code=502, detail=str(e))
 
 

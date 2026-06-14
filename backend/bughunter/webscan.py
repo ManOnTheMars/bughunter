@@ -75,12 +75,33 @@ async def _tls_not_after(host: str, port: int = 443) -> datetime | None:
             pass
 
 
-async def collect_web_evidence(url: str) -> dict:
-    """Fetch the URL (following redirects) and return raw, non-intrusive evidence."""
+def _auth_kwargs(headers: dict | None, cookie: str | None, basic: str | None):
+    """Build httpx client kwargs for an authenticated (logged-in) scan."""
+    hdrs = {"User-Agent": USER_AGENT}
+    if headers:
+        hdrs.update(headers)
+    if cookie:
+        hdrs["Cookie"] = cookie
+    auth = None
+    if basic and ":" in basic:
+        user, _, pw = basic.partition(":")
+        auth = (user, pw)
+    return hdrs, auth
+
+
+async def collect_web_evidence(
+    url: str, headers: dict | None = None, cookie: str | None = None, basic: str | None = None
+) -> dict:
+    """Fetch the URL (following redirects) and return raw, non-intrusive evidence.
+
+    If auth (headers/cookie/basic) is supplied, the request is made as the
+    logged-in user so the posture check covers authenticated responses too.
+    """
     url = _normalize(url)
+    hdrs, auth = _auth_kwargs(headers, cookie, basic)
     async with httpx.AsyncClient(
         follow_redirects=True, timeout=15.0,
-        headers={"User-Agent": USER_AGENT}, verify=True,
+        headers=hdrs, auth=auth, verify=True,
     ) as client:
         resp = await client.get(url)
 
@@ -102,6 +123,7 @@ async def collect_web_evidence(url: str) -> dict:
         "final_url": final,
         "scheme": parsed.scheme,
         "status": resp.status_code,
+        "authenticated": bool(headers or cookie or basic),
         "headers": headers,
         "set_cookie": resp.headers.get_list("set-cookie") if hasattr(resp.headers, "get_list") else [],
         "cookies": cookies,
@@ -171,6 +193,21 @@ def _rule_findings(ev: dict) -> list[Finding]:
                 "Set Secure, HttpOnly, and SameSite=Lax/Strict on session cookies.",
                 conf="Medium")
 
+    # Authenticated-session checks (only when scanning logged-in)
+    if ev.get("authenticated"):
+        cc = h.get("cache-control", "").lower()
+        if ev["status"] < 400 and ("no-store" not in cc and "private" not in cc):
+            add("Medium", "Authenticated page may be cacheable",
+                "An authenticated response without `Cache-Control: no-store`/`private` "
+                "can be stored by browsers or shared proxies, leaking private data.",
+                "Send `Cache-Control: no-store` (and `Pragma: no-cache`) on authenticated pages.",
+                conf="Medium")
+        if ev["status"] in (401, 403):
+            add("Low", "Credentials did not authenticate",
+                f"The authenticated request returned HTTP {ev['status']} — the supplied "
+                "cookie/header/credentials may be wrong or expired.",
+                "Verify the session cookie or credentials and re-scan.", conf="Medium")
+
     # TLS expiry
     if ev["tls_not_after"]:
         exp = datetime.fromisoformat(ev["tls_not_after"])
@@ -208,9 +245,16 @@ async def _ai_findings(ev: dict, url: str) -> list[Finding]:
     return [Finding(file=url, **item) for item in raw]
 
 
-async def scan_web(url: str, ai: bool = False) -> ScanResult:
-    """Scan a single URL's security posture. Set ai=True for LLM enrichment."""
-    ev = await collect_web_evidence(url)
+async def scan_web(
+    url: str, ai: bool = False, headers: dict | None = None,
+    cookie: str | None = None, basic: str | None = None,
+) -> ScanResult:
+    """Scan a single URL's security posture. Set ai=True for LLM enrichment.
+
+    Pass headers/cookie/basic to scan as a logged-in user (deeper, authenticated
+    checks). Authorized targets only.
+    """
+    ev = await collect_web_evidence(url, headers=headers, cookie=cookie, basic=basic)
     findings = _rule_findings(ev)
     if ai:
         try:

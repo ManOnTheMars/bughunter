@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import {
   Bug, ShieldAlert, Search, FolderSearch, Loader2, FileCode,
   ChevronDown, CheckCircle2, AlertTriangle, Square, Plus, History,
-  Globe, Server,
+  Globe, Server, Network, Lock,
 } from 'lucide-react'
 
 const SEVERITY = {
@@ -24,6 +24,7 @@ const SCAN_TYPES = [
   { key: 'code', label: 'Код', icon: FileCode },
   { key: 'web', label: 'Веб', icon: Globe },
   { key: 'host', label: 'Хост', icon: Server },
+  { key: 'net', label: 'Сүлжээ', icon: Network },
 ]
 const SEV_KEYS = ['All', 'Critical', 'High', 'Medium', 'Low']
 const HISTORY_KEY = 'bughunter.scans'
@@ -176,9 +177,14 @@ function HistoryTabs({ history, activeId, running, onSelect, onNew }) {
 export default function App() {
   const [scanType, setScanType] = useState('code')   // code | web | host
   const [path, setPath] = useState('')
-  const [target, setTarget] = useState('')           // url (web) / host (host)
+  const [target, setTarget] = useState('')           // url (web) / host (host) / cidr (net)
   const [aiWeb, setAiWeb] = useState(false)
   const [authorized, setAuthorized] = useState(false)
+  const [quick, setQuick] = useState(false)
+  const [showAuth, setShowAuth] = useState(false)
+  const [cookie, setCookie] = useState('')
+  const [authHeader, setAuthHeader] = useState('')   // "Key: Value"
+  const [basic, setBasic] = useState('')             // "user:pass"
   const [mode, setMode] = useState('all')
   const [maxFiles, setMaxFiles] = useState(40)
   const [running, setRunning] = useState(false)
@@ -277,10 +283,25 @@ export default function App() {
     if (!t || running) return
     closeStream()
     setRunning(true); setError(null); setLiveFindings([]); setActiveId(null); setSevFilter('All'); setProgress(null)
-    const endpoint = scanType === 'web' ? '/api/web' : '/api/host'
-    const body = scanType === 'web'
-      ? { url: t, ai: aiWeb }
-      : { host: t, authorized }
+    const endpoint = `/api/${scanType}`   // /api/web | /api/host | /api/net
+    let body
+    if (scanType === 'web') {
+      const headers = {}
+      if (authHeader.includes(':')) {
+        const i = authHeader.indexOf(':')
+        headers[authHeader.slice(0, i).trim()] = authHeader.slice(i + 1).trim()
+      }
+      body = {
+        url: t, ai: aiWeb,
+        cookie: cookie.trim() || null,
+        basic: basic.trim() || null,
+        headers: Object.keys(headers).length ? headers : null,
+      }
+    } else if (scanType === 'net') {
+      body = { cidr: t, authorized, quick }
+    } else {
+      body = { host: t, authorized }
+    }
     try {
       const r = await fetch(endpoint, {
         method: 'POST',
@@ -417,7 +438,11 @@ export default function App() {
               <div className="flex flex-col md:flex-row gap-2">
                 <input
                   className="input flex-1 num"
-                  placeholder={scanType === 'web' ? 'https://example.com' : '127.0.0.1   эсвэл   192.168.1.10'}
+                  placeholder={
+                    scanType === 'web' ? 'https://example.com'
+                    : scanType === 'net' ? '192.168.1.0/24'
+                    : '127.0.0.1   эсвэл   192.168.1.10'
+                  }
                   value={target}
                   onChange={(e) => setTarget(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && start()}
@@ -428,11 +453,33 @@ export default function App() {
                   {running ? 'Шинжилж байна…' : 'Шинжлэх'}
                 </button>
               </div>
+
               {scanType === 'web' && (
-                <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer w-fit">
-                  <input type="checkbox" checked={aiWeb} onChange={(e) => setAiWeb(e.target.checked)} />
-                  AI нэмэлт шинжилгээ (хариуг LLM-ээр гүнзгийрүүлэх)
-                </label>
+                <>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                      <input type="checkbox" checked={aiWeb} onChange={(e) => setAiWeb(e.target.checked)} />
+                      AI нэмэлт шинжилгээ
+                    </label>
+                    <button
+                      onClick={() => setShowAuth(!showAuth)}
+                      className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200"
+                    >
+                      <Lock size={12} /> Нэвтрэлт (authenticated scan)
+                      <ChevronDown size={13} className={`transition-transform ${showAuth ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
+                  {showAuth && (
+                    <div className="grid sm:grid-cols-3 gap-2 pt-1">
+                      <input className="input num text-xs" placeholder="Cookie: session=abc"
+                        value={cookie} onChange={(e) => setCookie(e.target.value)} aria-label="Cookie" />
+                      <input className="input num text-xs" placeholder="Header: Authorization: Bearer …"
+                        value={authHeader} onChange={(e) => setAuthHeader(e.target.value)} aria-label="Header" />
+                      <input className="input num text-xs" placeholder="Basic: user:pass"
+                        value={basic} onChange={(e) => setBasic(e.target.value)} aria-label="Basic auth" />
+                    </div>
+                  )}
+                </>
               )}
               {scanType === 'host' && (
                 <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer w-fit">
@@ -440,10 +487,24 @@ export default function App() {
                   <span>Би энэ target-г скан хийх <span className="text-high">зөвшөөрөлтэй</span> (public хаягт шаардлагатай)</span>
                 </label>
               )}
+              {scanType === 'net' && (
+                <div className="flex items-center gap-3 flex-wrap">
+                  <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                    <input type="checkbox" checked={authorized} onChange={(e) => setAuthorized(e.target.checked)} />
+                    <span><span className="text-high">Зөвшөөрөлтэй</span> (public range-д шаардлагатай)</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                    <input type="checkbox" checked={quick} onChange={(e) => setQuick(e.target.checked)} />
+                    Хурдан (зөвхөн түгээмэл портууд)
+                  </label>
+                </div>
+              )}
               <p className="text-[11px] text-slate-600">
                 {scanType === 'web'
-                  ? 'Зөвхөн өөрийн эзэмшдэг / зөвшөөрөлтэй сайтыг шалга. Довтлох payload явуулахгүй — header/cookie/TLS/мэдээлэл задралт шалгана.'
-                  : 'Зөвхөн өөрийн / зөвшөөрөлтэй host. Стандарт TCP порт скан (exploit хийхгүй). Private/localhost default зөвшөөрөгдөнө.'}
+                  ? 'Зөвхөн өөрийн / зөвшөөрөлтэй сайт. Довтлох payload явуулахгүй — header/cookie/TLS/мэдээлэл задралт. Нэвтрэлт оруулбал нэвтэрсэн төлөвт гүн шалгана.'
+                  : scanType === 'net'
+                  ? 'CIDR range доторх амьд host, нээлттэй порт, OS таамаг (banner+TTL heuristic). Private default; public бол зөвшөөрөл. Exploit хийхгүй.'
+                  : 'Зөвхөн өөрийн / зөвшөөрөлтэй host. Стандарт TCP порт скан (exploit хийхгүй). Private/localhost default.'}
               </p>
             </div>
           )}
