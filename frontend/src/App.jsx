@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import {
   Bug, ShieldAlert, Search, FolderSearch, Loader2, FileCode,
   ChevronDown, CheckCircle2, AlertTriangle, Square, Plus, History,
-  Globe, Server, Network, Lock,
+  Globe, Server, Network, Lock, X, Trash2, GitCompare, ScanLine,
 } from 'lucide-react'
 
 const SEVERITY = {
@@ -48,6 +48,39 @@ function summarize(findings, root, filesScanned, filesSkipped) {
 function shortPath(p) {
   const parts = p.replace(/[/\\]+$/, '').split(/[/\\]/)
   return parts.slice(-2).join('/') || p
+}
+
+// Scan type of a history item (code scans store mode as all/security/logic)
+const TYPE_BY_KEY = Object.fromEntries(SCAN_TYPES.map((t) => [t.key, t]))
+function histType(item) {
+  return ['web', 'host', 'net'].includes(item.mode) ? item.mode : 'code'
+}
+function worstSeverity(summary) {
+  const s = summary?.by_severity || {}
+  return ['Critical', 'High', 'Medium', 'Low'].find((k) => s[k] > 0) || null
+}
+function relTime(ts) {
+  const d = Math.max(0, Date.now() - ts), m = 60000, h = 3600000, day = 86400000
+  if (d < m) return 'саяхан'
+  if (d < h) return `${Math.floor(d / m)}м`
+  if (d < day) return `${Math.floor(d / h)}ц`
+  return `${Math.floor(d / day)}ө`
+}
+
+// ---- diff between two scans of the same target ----
+const findingKey = (f) => `${f.file}|${f.line}|${f.title}`
+function diffFindings(curr, prev) {
+  const pk = new Set(prev.map(findingKey)), ck = new Set(curr.map(findingKey))
+  return {
+    added: curr.filter((f) => !pk.has(findingKey(f))).sort(bySeverity),
+    removed: prev.filter((f) => !ck.has(findingKey(f))).sort(bySeverity),
+  }
+}
+// Most recent older scan of the same target + same scan type
+function previousScanFor(history, item) {
+  const idx = history.findIndex((h) => h.id === item.id)
+  if (idx === -1) return null
+  return history.slice(idx + 1).find((h) => h.path === item.path && histType(h) === histType(item)) || null
 }
 
 function loadHistory() {
@@ -198,41 +231,180 @@ function HostGroup({ host, header, items, sevFilter }) {
   )
 }
 
-function HistoryTabs({ history, activeId, running, onSelect, onNew }) {
-  if (!history.length && !running) return null
+function HistoryRow({ h, num, active, onSelect, onDelete }) {
+  const t = TYPE_BY_KEY[histType(h)] || TYPE_BY_KEY.code
+  const Icon = t.icon
+  const total = h.result?.summary?.total_findings ?? 0
+  const worst = worstSeverity(h.result?.summary)
   return (
-    <div className="flex gap-1 items-center overflow-x-auto pb-1">
-      <History size={14} className="text-slate-500 shrink-0" />
-      <button
-        onClick={onNew}
-        className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg border shrink-0 transition-colors ${
-          !running && activeId === null
-            ? 'bg-accent/15 text-accent border-accent/30'
-            : 'border-surface-700/60 text-slate-400 hover:text-slate-200'
-        }`}
-      >
-        <Plus size={13} /> Шинэ
-      </button>
-      {running && (
-        <span className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border border-accent/30 text-accent shrink-0">
-          <Loader2 size={12} className="animate-spin" /> Идэвхтэй
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect(h.id)}
+      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onSelect(h.id))}
+      title={`${h.path}\n${new Date(h.ts).toLocaleString()}`}
+      className={`group flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
+        active
+          ? 'bg-surface-700/50 border-surface-600'
+          : 'bg-surface-900/40 border-surface-700/60 hover:bg-surface-800/50 hover:border-surface-600'
+      }`}
+    >
+      <span className="num text-xs text-slate-500 w-6 text-right shrink-0">{num}.</span>
+      <Icon size={15} className="shrink-0 text-slate-400" />
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        <span className="num text-sm text-slate-200 truncate">{shortPath(h.path)}</span>
+        <span className="text-[10px] uppercase tracking-wider text-slate-600 shrink-0 hidden sm:inline">{t.label}</span>
+        {h.partial && <span className="text-medium text-[10px] shrink-0">хагас</span>}
+      </div>
+      {worst ? (
+        <span className={`flex items-center gap-1.5 shrink-0 ${SEVERITY[worst].text}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${SEVERITY[worst].dot}`} />
+          <span className="num text-xs">{total}</span>
         </span>
+      ) : (
+        <CheckCircle2 size={14} className="text-low shrink-0" />
       )}
-      {history.map((h) => (
-        <button
-          key={h.id}
-          onClick={() => onSelect(h.id)}
-          title={h.path}
-          className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border shrink-0 transition-colors ${
-            !running && activeId === h.id
-              ? 'bg-surface-700/60 text-slate-100 border-surface-600'
-              : 'border-surface-700/60 text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <span className="num truncate max-w-[150px]">{shortPath(h.path)}</span>
-          {h.partial && <span className="text-medium text-[10px]">хагас</span>}
-        </button>
-      ))}
+      <span className="num text-[11px] text-slate-500 w-12 text-right shrink-0">{relTime(h.ts)}</span>
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(h.id) }}
+        aria-label="Устгах"
+        className="p-1 rounded text-slate-600 opacity-0 group-hover:opacity-100 hover:text-critical hover:bg-surface-800 transition-opacity shrink-0"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  )
+}
+
+const HIST_FILTERS = [['all', 'Бүгд'], ['code', 'Код'], ['web', 'Веб'], ['host', 'Хост'], ['net', 'Сүлжээ']]
+
+function HistoryPanel({ history, activeId, filter, onFilter, onSelect, onDelete, onClear, onNew }) {
+  const [confirmClear, setConfirmClear] = useState(false)
+  const filtered = filter === 'all' ? history : history.filter((h) => histType(h) === filter)
+  return (
+    <div className="card space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 text-slate-400">
+          <History size={15} />
+          <span className="text-[11px] uppercase tracking-widest">Скан түүх</span>
+          <span className="num text-[11px] text-slate-600">{history.length}</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <button onClick={onNew} className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-accent/15 text-accent hover:bg-accent/25 transition-colors">
+            <Plus size={13} /> Шинэ скан
+          </button>
+          {history.length > 0 && (
+            confirmClear ? (
+              <span className="flex items-center gap-2 text-[11px]">
+                <span className="text-slate-300">Бүгдийг ({history.length}) устгах уу?</span>
+                <button
+                  onClick={() => { onClear(); setConfirmClear(false) }}
+                  className="font-medium text-critical hover:underline"
+                >
+                  Тийм, устга
+                </button>
+                <button
+                  onClick={() => setConfirmClear(false)}
+                  className="text-slate-400 hover:text-slate-200"
+                >
+                  Болих
+                </button>
+              </span>
+            ) : (
+              <button
+                onClick={() => setConfirmClear(true)}
+                className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-critical transition-colors"
+                title="Бүх түүхийг цэвэрлэх"
+              >
+                <Trash2 size={12} /> Цэвэрлэх
+              </button>
+            )
+          )}
+        </div>
+      </div>
+
+      {/* Type filter */}
+      <div className="flex gap-1 flex-wrap">
+        {HIST_FILTERS.map(([k, label]) => {
+          const count = k === 'all' ? history.length : history.filter((h) => histType(h) === k).length
+          const active = filter === k
+          return (
+            <button
+              key={k}
+              onClick={() => onFilter(k)}
+              className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
+                active ? 'bg-accent/15 text-accent border-accent/30'
+                       : 'border-surface-700/60 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {label}{count ? ` ${count}` : ''}
+            </button>
+          )
+        })}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-10 text-slate-500">
+          <History size={26} className="text-slate-600" />
+          <p className="text-sm">{history.length === 0 ? 'Түүх хоосон байна.' : 'Энэ төрлийн скан алга.'}</p>
+        </div>
+      ) : (
+        <div className="space-y-1 max-h-[28rem] overflow-y-auto pr-0.5">
+          {filtered.map((h, i) => (
+            <HistoryRow key={h.id} h={h} num={i + 1} active={activeId === h.id} onSelect={onSelect} onDelete={onDelete} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DiffFindingRow({ f, kind }) {
+  const sev = SEVERITY[f.severity]
+  return (
+    <div className="flex items-center gap-2 text-xs py-0.5">
+      <span className={`shrink-0 num ${kind === 'added' ? 'text-critical' : 'text-low'}`}>{kind === 'added' ? '+' : '−'}</span>
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${sev.dot}`} />
+      <span className="text-slate-300 truncate flex-1">{f.title}</span>
+      <span className="num text-slate-600 shrink-0 truncate max-w-[180px]">{f.file}{f.line ? `:${f.line}` : ''}</span>
+    </div>
+  )
+}
+
+function DiffBanner({ diff, prev }) {
+  const added = diff.added.length, removed = diff.removed.length
+  if (!added && !removed) {
+    return (
+      <div className="card flex items-center gap-2 text-sm text-low">
+        <GitCompare size={15} /> Өмнөх скантай ижил — өөрчлөлт алга ({relTime(prev.ts)} өмнө хийсэнтэй харьцуулав).
+      </div>
+    )
+  }
+  return (
+    <div className="card space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <GitCompare size={15} className="text-accent" />
+        <span className="text-[11px] uppercase tracking-widest text-slate-400">Өөрчлөлт</span>
+        <span className="text-[11px] text-slate-500 num">{relTime(prev.ts)} өмнөх скантай харьцуулав</span>
+        <span className="ml-auto flex items-center gap-3 text-sm">
+          {added > 0 && <span className="text-critical num">+{added} шинэ</span>}
+          {removed > 0 && <span className="text-low num">−{removed} засагдсан</span>}
+        </span>
+      </div>
+      {added > 0 && (
+        <div>
+          <p className="text-[11px] text-critical mb-1">Шинээр гарсан</p>
+          <div className="space-y-0.5">{diff.added.slice(0, 12).map((f, i) => <DiffFindingRow key={i} f={f} kind="added" />)}
+            {added > 12 && <p className="text-[11px] text-slate-600">…+{added - 12} бусад</p>}</div>
+        </div>
+      )}
+      {removed > 0 && (
+        <div>
+          <p className="text-[11px] text-low mb-1">Засагдсан / алга болсон</p>
+          <div className="space-y-0.5">{diff.removed.slice(0, 12).map((f, i) => <DiffFindingRow key={i} f={f} kind="removed" />)}
+            {removed > 12 && <p className="text-[11px] text-slate-600">…+{removed - 12} бусад</p>}</div>
+        </div>
+      )}
     </div>
   )
 }
@@ -259,6 +431,8 @@ export default function App() {
   const [activeId, setActiveId] = useState(null)
   const [sevFilter, setSevFilter] = useState('All')
   const [model, setModel] = useState(null)
+  const [view, setView] = useState('scan')           // scan | history
+  const [histFilter, setHistFilter] = useState('all')
   const esRef = useRef(null)
 
   // Active model label for the header.
@@ -287,6 +461,17 @@ export default function App() {
     setRunning(false)
     setLiveFindings([])
     setProgress(null)
+  }
+
+  function deleteScan(id) {
+    const next = history.filter((h) => h.id !== id)
+    persist(next)
+    if (activeId === id) setActiveId(null)
+  }
+
+  function clearHistory() {
+    persist([])
+    setActiveId(null)
   }
 
   function closeStream() {
@@ -429,6 +614,9 @@ export default function App() {
     ? hostGroups
     : hostGroups.filter((g) => g.items.some((f) => f.severity === sevFilter))
   const liveHosts = grouped ? hostGroups.length : 0
+  // Change diff: compare the shown finished scan with the previous scan of the same target
+  const prevScan = activeItem && !running ? previousScanFor(history, activeItem) : null
+  const diff = prevScan ? diffFindings(activeItem.result.findings, prevScan.result.findings) : null
 
   return (
     <div className="min-h-dvh">
@@ -439,6 +627,22 @@ export default function App() {
             <Bug size={16} />
           </span>
           <span className="font-semibold tracking-tight text-sm">Bug<span className="text-critical">Hunter</span></span>
+          <nav className="ml-4 flex gap-1 text-xs">
+            {[['scan', 'Скан', ScanLine], ['history', 'Түүх', History]].map(([k, label, Icon]) => (
+              <button
+                key={k}
+                onClick={() => setView(k)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                  view === k ? 'bg-surface-700/60 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Icon size={14} /> {label}
+                {k === 'history' && history.length > 0 && (
+                  <span className="num text-[10px] px-1.5 rounded-full bg-surface-700 text-slate-300">{history.length}</span>
+                )}
+              </button>
+            ))}
+          </nav>
           <span className="ml-auto text-[11px] text-slate-500 uppercase tracking-widest hidden sm:block num">
             {model || 'Security + Logic'}
           </span>
@@ -446,7 +650,8 @@ export default function App() {
       </header>
 
       <main className="p-6 max-w-[1400px] mx-auto space-y-6 animate-fade-in">
-        {/* Scan controls */}
+        {/* Scan controls (scan view only) */}
+        {view === 'scan' && (
         <div className="card space-y-3">
           {/* Scan-type selector */}
           <div className="flex gap-1 bg-surface-900 border border-surface-600/60 rounded-lg p-1 w-fit">
@@ -610,15 +815,24 @@ export default function App() {
             <ProgressBar done={progress.done} total={progress.total} file={progress.file} />
           )}
         </div>
+        )}
 
-        {/* History tabs */}
-        <HistoryTabs
-          history={history}
-          activeId={activeId}
-          running={running}
-          onSelect={(id) => { setActiveId(id); setSevFilter('All') }}
-          onNew={() => { setActiveId(null); setError(null) }}
-        />
+        {/* History panel (history view only) */}
+        {view === 'history' && (
+          <HistoryPanel
+            history={history}
+            activeId={activeId}
+            filter={histFilter}
+            onFilter={setHistFilter}
+            onSelect={(id) => { setActiveId(id); setSevFilter('All') }}
+            onNew={() => { setView('scan'); setActiveId(null); setError(null) }}
+            onDelete={deleteScan}
+            onClear={clearHistory}
+          />
+        )}
+
+        {/* Change diff vs previous scan of the same target */}
+        {diff && <DiffBanner diff={diff} prev={prevScan} />}
 
         {/* Summary + findings */}
         {s && (
@@ -692,7 +906,7 @@ export default function App() {
         )}
 
         {/* Empty initial state */}
-        {!s && !running && (
+        {view === 'scan' && !s && !running && (
           <div className="card flex flex-col items-center gap-3 py-16 text-slate-400">
             <FileCode size={32} className="text-slate-600" />
             <p className="text-sm">Локал фолдер эсвэл файлын замыг оруулаад <span className="text-accent font-medium">Шинжлэх</span> дарна уу.</p>
