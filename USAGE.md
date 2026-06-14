@@ -67,7 +67,13 @@ npm run dev
    - **Аюулгүй байдал** — зөвхөн security
    - **Логик алдаа** — зөвхөн logic
 4. Файлын дээд тоо (default 40) тохируул.
-5. **Шинжлэх** дар. Үр дүн severity-ээр эрэмбэлэгдэж харагдана.
+5. **Шинжлэх** дар. Үр дүн **шууд урсаж** харагдана:
+   - Дээд талд **progress bar** (хийгдсэн/нийт файл, %) + одоо шинжилж буй файл.
+   - Олдсон асуудлууд бэлэн болмогц нэг нэгээр нэмэгдэнэ (бүх скан дуустал хүлээхгүй).
+   - **Зогсоох** товч скан дундуур таслаад, олдсон хэсгийг хадгална.
+6. **Severity filter** (Бүгд / Critical / High / Medium / Low) chip-ээр шүүнэ.
+7. **Түүх (history):** дууссан скануудыг хөтөч дотор (`localStorage`, ~20 хүртэл)
+   хадгалж, дээд талын таб-аар хооронд нь сэлгэнэ. "Шинэ" дарж шинэ скан эхлүүлнэ.
 
 ---
 
@@ -116,6 +122,12 @@ confidence (High/Medium/Low) агуулна.
 ```ini
 # Аль backend ашиглах: "ollama" (локал) эсвэл "anthropic" (cloud)
 PROVIDER=ollama
+
+# Хэдэн файлыг зэрэг шинжлэх (default 5). Cloud (Anthropic) дээр өндөр тоо
+# хурдасгана; локал ганц Ollama загвар дээр хүсэлтүүд GPU дээр дараалдаг тул
+# өсгөх нь хурд нэмэхгүй (мөн том загвар OOM болж магадгүй) — даруухан байлга.
+# Локал параллель болгох бол Ollama-ийн өөрийн OLLAMA_NUM_PARALLEL-ийг өсгө.
+# SCAN_CONCURRENCY=5
 
 # --- Ollama (локал, үнэгүй) ---
 OLLAMA_HOST=http://localhost:11434
@@ -185,9 +197,13 @@ backend/bughunter/
   provider.py   # LLM backend switch: Anthropic (cloud) | Ollama (локал)
   schemas.py    # Finding/ScanResult загвар + JSON schema
   cli.py        # `python -m bughunter.cli scan <зам>` — өнгөт терминал тайлан
-  server.py     # FastAPI: POST /scan -> ScanResult, GET /health
+  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE, live), GET /health
 frontend/       # React + Vite + Tailwind dashboard (/api -> :8000 proxy)
 ```
+
+`analyzer.py`-д `scan_path` (нэг удаагийн үр дүн, CLI/`POST /scan`-д) болон
+`scan_stream` (event-ээр урсгах, `GET /scan/stream`-д) гэсэн хоёр зам байна. UI нь
+`EventSource`-оор stream-г сонсож progress/finding-г шууд харуулна.
 
 Хоёр горим хоёулаа JSON schema-аар хязгаарлагдсан хариу буцаадаг тул markdown
 задлах эсвэл JSON засах логик хэрэггүй.

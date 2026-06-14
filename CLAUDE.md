@@ -12,12 +12,14 @@ in local codebases. CLI + web dashboard over a shared analysis engine.
 ```
 backend/bughunter/
   scanner.py    # collect source files from a local path (ignores, size limits)
-  analyzer.py   # per-file analysis → structured Finding[] (concurrent)
+  analyzer.py   # scan_path (one-shot ScanResult) + scan_stream (async event generator);
+                #   per-file analysis → Finding[], concurrent (SCAN_CONCURRENCY, default 5)
   provider.py   # LLM backend switch: Anthropic (cloud) | Ollama (local)
   schemas.py    # Finding/ScanResult models + the JSON schema the model is bound to
   cli.py        # `python -m bughunter.cli scan <path>` — colored terminal report
-  server.py     # FastAPI: POST /scan -> ScanResult
+  server.py     # FastAPI: POST /scan -> ScanResult; GET /scan/stream -> SSE (live); GET /health
 frontend/       # React + Vite + Tailwind dashboard (proxies /api -> :8000)
+                #   EventSource live progress, severity filter, localStorage scan history
 ```
 
 ## Providers (provider.py)
