@@ -135,6 +135,69 @@ function FindingCard({ f }) {
   )
 }
 
+// ---- host grouping (network / host scans) ----
+const hostOf = (file) => { const i = file.indexOf(':'); return i === -1 ? file : file.slice(0, i) }
+
+function groupByHost(findings) {
+  const groups = new Map()
+  for (const f of findings) {
+    const host = hostOf(f.file)
+    if (!groups.has(host)) groups.set(host, { host, header: null, items: [] })
+    const g = groups.get(host)
+    if (!f.file.includes(':')) g.header = f      // the "Live host" summary finding (net)
+    else g.items.push(f)
+  }
+  for (const g of groups.values()) g.items.sort(bySeverity)
+  // hosts with worst findings first, then by name
+  return [...groups.values()].sort((a, b) => {
+    const wa = a.items.length ? SEVERITY[a.items[0].severity].rank : 9
+    const wb = b.items.length ? SEVERITY[b.items[0].severity].rank : 9
+    return wa - wb || a.host.localeCompare(b.host)
+  })
+}
+
+function HostGroup({ host, header, items, sevFilter }) {
+  const [open, setOpen] = useState(true)
+  const shownItems = items.filter((f) => sevFilter === 'All' || f.severity === sevFilter)
+  const worstKey = items.length ? items[0].severity : 'Low'
+  const osMatch = header?.title.match(/\[(.+?)\]/)
+  const os = osMatch ? osMatch[1] : null
+  // per-severity counts for this host
+  const counts = items.reduce((m, f) => ((m[f.severity] = (m[f.severity] || 0) + 1), m), {})
+  return (
+    <div className="bg-surface-900/60 border border-surface-700/60 rounded-lg overflow-hidden animate-fade-in">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-800/50 transition-colors"
+      >
+        <span className={`w-2 h-2 rounded-full shrink-0 ${SEVERITY[worstKey].dot}`} />
+        <Server size={14} className="text-slate-400 shrink-0" />
+        <span className="num font-medium text-sm">{host}</span>
+        {os && <span className="text-[11px] px-2 py-0.5 rounded-full bg-surface-700/60 text-slate-300">{os}</span>}
+        <span className="flex items-center gap-1.5 ml-auto shrink-0">
+          {['Critical', 'High', 'Medium', 'Low'].map((k) => counts[k] ? (
+            <span key={k} className={`text-[11px] num ${SEVERITY[k].text}`}>{counts[k]} {k[0]}</span>
+          ) : null)}
+          <span className="text-xs text-slate-500 num">{items.length} порт</span>
+        </span>
+        <ChevronDown size={15} className={`text-slate-500 transition-transform shrink-0 ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-1.5">
+          {header && <p className="text-[11px] text-slate-500 px-1 num">{header.description}</p>}
+          {items.length === 0 ? (
+            <p className="text-xs text-slate-500 px-1 py-1">Нээлттэй порт олдсонгүй.</p>
+          ) : shownItems.length === 0 ? (
+            <p className="text-xs text-slate-500 px-1 py-1">Энэ түвшний асуудал алга.</p>
+          ) : (
+            shownItems.map((f, i) => <FindingCard key={`${f.file}:${i}`} f={f} />)
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function HistoryTabs({ history, activeId, running, onSelect, onNew }) {
   if (!history.length && !running) return null
   return (
@@ -357,7 +420,15 @@ export default function App() {
       }
     : activeItem?.result
   const s = shown?.summary
+  const shownType = running ? scanType : (activeItem?.mode || 'code')
+  const grouped = shownType === 'net' || shownType === 'host'
   const visibleFindings = (shown?.findings || []).filter((f) => sevFilter === 'All' || f.severity === sevFilter)
+  // Host-grouped view for network/host scans
+  const hostGroups = grouped ? groupByHost(shown?.findings || []) : []
+  const visibleGroups = sevFilter === 'All'
+    ? hostGroups
+    : hostGroups.filter((g) => g.items.some((f) => f.severity === sevFilter))
+  const liveHosts = grouped ? hostGroups.length : 0
 
   return (
     <div className="min-h-dvh">
@@ -557,15 +628,25 @@ export default function App() {
               <StatCard label="Critical" value={s.by_severity.Critical} tone={s.by_severity.Critical ? 'text-critical' : 'text-slate-500'} />
               <StatCard label="High" value={s.by_severity.High} tone={s.by_severity.High ? 'text-high' : 'text-slate-500'} />
               <StatCard label="Medium" value={s.by_severity.Medium} tone={s.by_severity.Medium ? 'text-medium' : 'text-slate-500'} />
-              <StatCard label="Аюулгүй / Логик" value={`${s.by_category.Security} / ${s.by_category.Logic}`} />
-              <StatCard label="Файл" value={`${s.files_scanned}`} tone="text-slate-300" />
+              {shownType === 'net' ? (
+                <StatCard label="Амьд host" value={liveHosts} tone={liveHosts ? 'text-slate-100' : 'text-slate-500'} />
+              ) : (
+                <StatCard label="Аюулгүй / Логик" value={`${s.by_category.Security} / ${s.by_category.Logic}`} />
+              )}
+              <StatCard
+                label={shownType === 'net' ? 'Host шалгасан' : shownType === 'host' ? 'Порт шалгасан' : 'Файл'}
+                value={`${s.files_scanned}`}
+                tone="text-slate-300"
+              />
             </div>
 
             <div className="card space-y-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div className="flex items-center gap-2 text-slate-400">
                   <ShieldAlert size={15} />
-                  <span className="text-[11px] uppercase tracking-widest">Олдсон асуудлууд</span>
+                  <span className="text-[11px] uppercase tracking-widest">
+                    {shownType === 'net' ? 'Олдсон host-ууд' : 'Олдсон асуудлууд'}
+                  </span>
                   {running && <Loader2 size={13} className="animate-spin text-accent" />}
                 </div>
                 {shown.findings.length > 0 && (
@@ -577,7 +658,20 @@ export default function App() {
                   {running ? (
                     <><Loader2 size={26} className="animate-spin text-accent" /><p className="text-sm">Шинжилж байна…</p></>
                   ) : (
-                    <><CheckCircle2 size={28} className="text-low" /><p className="text-sm">Асуудал олдсонгүй — {s.files_scanned} файл цэвэрхэн.</p></>
+                    <><CheckCircle2 size={28} className="text-low" /><p className="text-sm">
+                      {shownType === 'net' ? 'Амьд host олдсонгүй.'
+                       : shownType === 'host' ? 'Нээлттэй порт олдсонгүй.'
+                       : `Асуудал олдсонгүй — ${s.files_scanned} файл цэвэрхэн.`}
+                    </p></>
+                  )}
+                </div>
+              ) : grouped ? (
+                <div className="space-y-2">
+                  {visibleGroups.map((g) => (
+                    <HostGroup key={g.host} host={g.host} header={g.header} items={g.items} sevFilter={sevFilter} />
+                  ))}
+                  {visibleGroups.length === 0 && (
+                    <p className="text-sm text-slate-500 py-6 text-center">Энэ түвшний асуудалтай host алга.</p>
                   )}
                 </div>
               ) : (
