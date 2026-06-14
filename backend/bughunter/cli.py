@@ -6,8 +6,11 @@ import os
 import sys
 
 from .analyzer import scan_path
+from .hostscan import scan_host
+from .netscan import scan_network
 from .provider import PROVIDER
 from .schemas import ScanResult
+from .webscan import scan_web
 
 # ANSI colors (cross-platform enough for modern terminals / Windows Terminal).
 _C = {
@@ -53,43 +56,107 @@ def _print_report(result: ScanResult) -> None:
         print()
 
 
+def _needs_key() -> bool:
+    return PROVIDER == "anthropic" and not os.getenv("ANTHROPIC_API_KEY")
+
+
+def _no_key_msg() -> None:
+    print(_c("High", "ANTHROPIC_API_KEY is not set. Add it to backend/.env, "
+                     "or set PROVIDER=ollama to use a local model."),
+          file=sys.stderr)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="bughunter", description="Claude-powered bug & security hunter")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sc = sub.add_parser("scan", help="Scan a local folder or file")
+    sc = sub.add_parser("scan", help="Scan a local folder or file for code bugs")
     sc.add_argument("path", help="Folder or file to scan")
     sc.add_argument("--security-only", action="store_true", help="Only security vulnerabilities")
     sc.add_argument("--logic-only", action="store_true", help="Only logic/correctness bugs")
     sc.add_argument("--max-files", type=int, default=None, help="Cap number of files analysed")
+    sc.add_argument("--verify", action="store_true", help="Second pass to drop false positives")
     sc.add_argument("--json", dest="json_out", metavar="FILE", help="Also write findings as JSON")
+
+    wc = sub.add_parser("web", help="Non-intrusive web security posture scan of a URL")
+    wc.add_argument("url", help="Target URL (e.g. https://example.com) — authorized targets only")
+    wc.add_argument("--ai", action="store_true", help="Add LLM enrichment of the response")
+    wc.add_argument("--cookie", help="Cookie header for an authenticated scan, e.g. \"session=abc\"")
+    wc.add_argument("--header", action="append", default=[], metavar="K:V",
+                    help="Extra request header (repeatable), e.g. \"Authorization: Bearer ...\"")
+    wc.add_argument("--basic", metavar="USER:PASS", help="HTTP Basic auth credentials")
+    wc.add_argument("--json", dest="json_out", metavar="FILE", help="Also write findings as JSON")
+
+    nc = sub.add_parser("net", help="Discover live hosts in a network + OS guess (authorized only)")
+    nc.add_argument("cidr", help="CIDR range, e.g. 192.168.1.0/24. Public ranges require --authorized")
+    nc.add_argument("--authorized", action="store_true",
+                    help="Confirm you are authorized to scan a non-private range")
+    nc.add_argument("--quick", action="store_true", help="Probe only common ports (faster)")
+    nc.add_argument("--json", dest="json_out", metavar="FILE", help="Also write findings as JSON")
+
+    hc = sub.add_parser("host", help="TCP port/service scan of a host (authorized targets only)")
+    hc.add_argument("host", help="Host or IP. Public targets require --authorized")
+    hc.add_argument("--ports", help="Comma-separated ports (default: common ports)")
+    hc.add_argument("--authorized", action="store_true",
+                    help="Confirm you are authorized to scan a non-private target")
+    hc.add_argument("--json", dest="json_out", metavar="FILE", help="Also write findings as JSON")
 
     args = parser.parse_args(argv)
 
-    if PROVIDER == "anthropic" and not os.getenv("ANTHROPIC_API_KEY"):
-        print(_c("High", "ANTHROPIC_API_KEY is not set. Add it to backend/.env, "
-                         "or set PROVIDER=ollama to use a local model."),
-              file=sys.stderr)
-        return 2
-
-    categories = None
-    if args.security_only:
-        categories = ["Security"]
-    elif args.logic_only:
-        categories = ["Logic"]
-
-    def progress(rel, done, total=None, found=0, error=None):
-        if error:
-            print(_c("dim", f"  ! {rel}: {error}"), file=sys.stderr)
-        elif done:
-            bar = f"[{done}/{total}]"
-            note = _c("High", f" {found} found") if found else ""
-            print(_c("dim", f"  {bar} {rel}{note}"), file=sys.stderr)
-
     try:
-        result = asyncio.run(scan_path(args.path, categories, args.max_files, progress))
+        if args.cmd == "scan":
+            if _needs_key():
+                _no_key_msg()
+                return 2
+            categories = (["Security"] if args.security_only
+                          else ["Logic"] if args.logic_only else None)
+
+            def progress(rel, done, total=None, found=0, error=None):
+                if error:
+                    print(_c("dim", f"  ! {rel}: {error}"), file=sys.stderr)
+                elif done:
+                    note = _c("High", f" {found} found") if found else ""
+                    print(_c("dim", f"  [{done}/{total}] {rel}{note}"), file=sys.stderr)
+
+            result = asyncio.run(scan_path(args.path, categories, args.max_files, progress, args.verify))
+
+        elif args.cmd == "web":
+            if args.ai and _needs_key():
+                _no_key_msg()
+                return 2
+            headers = {}
+            for h in args.header:
+                if ":" in h:
+                    k, _, v = h.partition(":")
+                    headers[k.strip()] = v.strip()
+            print(_c("dim", f"  Scanning {args.url} …"), file=sys.stderr)
+            result = asyncio.run(scan_web(
+                args.url, ai=args.ai, headers=headers or None,
+                cookie=args.cookie, basic=args.basic,
+            ))
+
+        elif args.cmd == "net":
+            print(_c("dim", f"  Sweeping {args.cidr} …"), file=sys.stderr)
+            result = asyncio.run(scan_network(
+                args.cidr, authorized=args.authorized, full_ports=not args.quick,
+            ))
+
+        elif args.cmd == "host":
+            ports = None
+            if args.ports:
+                ports = [int(p) for p in args.ports.split(",") if p.strip()]
+            print(_c("dim", f"  Scanning {args.host} …"), file=sys.stderr)
+            result = asyncio.run(scan_host(args.host, ports, authorized=args.authorized))
+        else:
+            parser.error("unknown command")
     except FileNotFoundError as e:
         print(_c("High", str(e)), file=sys.stderr)
+        return 1
+    except PermissionError as e:  # host scan authorization gate
+        print(_c("Critical", f"  {e}"), file=sys.stderr)
+        return 2
+    except Exception as e:
+        print(_c("High", f"  Scan failed: {e}"), file=sys.stderr)
         return 1
 
     _print_report(result)

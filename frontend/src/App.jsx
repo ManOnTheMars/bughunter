@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import {
   Bug, ShieldAlert, Search, FolderSearch, Loader2, FileCode,
   ChevronDown, CheckCircle2, AlertTriangle, Square, Plus, History,
+  Globe, Server, Network, Lock,
 } from 'lucide-react'
 
 const SEVERITY = {
@@ -18,6 +19,12 @@ const MODES = [
   { key: 'all', label: 'Бүгд' },
   { key: 'security', label: 'Аюулгүй байдал' },
   { key: 'logic', label: 'Логик алдаа' },
+]
+const SCAN_TYPES = [
+  { key: 'code', label: 'Код', icon: FileCode },
+  { key: 'web', label: 'Веб', icon: Globe },
+  { key: 'host', label: 'Хост', icon: Server },
+  { key: 'net', label: 'Сүлжээ', icon: Network },
 ]
 const SEV_KEYS = ['All', 'Critical', 'High', 'Medium', 'Low']
 const HISTORY_KEY = 'bughunter.scans'
@@ -168,7 +175,16 @@ function HistoryTabs({ history, activeId, running, onSelect, onNew }) {
 }
 
 export default function App() {
+  const [scanType, setScanType] = useState('code')   // code | web | host
   const [path, setPath] = useState('')
+  const [target, setTarget] = useState('')           // url (web) / host (host) / cidr (net)
+  const [aiWeb, setAiWeb] = useState(false)
+  const [authorized, setAuthorized] = useState(false)
+  const [quick, setQuick] = useState(false)
+  const [showAuth, setShowAuth] = useState(false)
+  const [cookie, setCookie] = useState('')
+  const [authHeader, setAuthHeader] = useState('')   // "Key: Value"
+  const [basic, setBasic] = useState('')             // "user:pass"
   const [mode, setMode] = useState('all')
   const [maxFiles, setMaxFiles] = useState(40)
   const [running, setRunning] = useState(false)
@@ -261,6 +277,58 @@ export default function App() {
     })
   }
 
+  // Web / host scans are quick POST requests (no streaming).
+  async function runPostScan() {
+    const t = target.trim()
+    if (!t || running) return
+    closeStream()
+    setRunning(true); setError(null); setLiveFindings([]); setActiveId(null); setSevFilter('All'); setProgress(null)
+    const endpoint = `/api/${scanType}`   // /api/web | /api/host | /api/net
+    let body
+    if (scanType === 'web') {
+      const headers = {}
+      if (authHeader.includes(':')) {
+        const i = authHeader.indexOf(':')
+        headers[authHeader.slice(0, i).trim()] = authHeader.slice(i + 1).trim()
+      }
+      body = {
+        url: t, ai: aiWeb,
+        cookie: cookie.trim() || null,
+        basic: basic.trim() || null,
+        headers: Object.keys(headers).length ? headers : null,
+      }
+    } else if (scanType === 'net') {
+      body = { cidr: t, authorized, quick }
+    } else {
+      body = { host: t, authorized }
+    }
+    try {
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!r.ok) {
+        let detail = `Алдаа (${r.status})`
+        try { detail = (await r.json()).detail || detail } catch { /* keep */ }
+        throw new Error(detail)
+      }
+      const result = await r.json()
+      finishScan({
+        id: `${Date.now()}-${Math.round(Math.random() * 1e6)}`,
+        path: t, mode: scanType, ts: Date.now(), result,
+      })
+    } catch (e) {
+      setError(e.message || 'Backend ажиллахгүй байна (port 8000)')
+      setRunning(false)
+    }
+  }
+
+  function start() {
+    if (scanType === 'code') scan()
+    else runPostScan()
+  }
+
   function stop() {
     closeStream()
     // Freeze partial results into history so they aren't lost.
@@ -307,54 +375,146 @@ export default function App() {
       <main className="p-6 max-w-[1400px] mx-auto space-y-6 animate-fade-in">
         {/* Scan controls */}
         <div className="card space-y-3">
-          <div className="flex items-center gap-2 text-slate-400">
-            <FolderSearch size={15} />
-            <span className="text-[11px] uppercase tracking-widest">Локал замыг шинжлэх</span>
-          </div>
-          <div className="flex flex-col md:flex-row gap-2">
-            <input
-              className="input flex-1 num"
-              placeholder="C:/Users/me/my-project   эсвэл   ./src"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && scan()}
-              aria-label="Scan path"
-            />
-            <div className="flex gap-1 bg-surface-900 border border-surface-600/60 rounded-lg p-1">
-              {MODES.map((m) => (
+          {/* Scan-type selector */}
+          <div className="flex gap-1 bg-surface-900 border border-surface-600/60 rounded-lg p-1 w-fit">
+            {SCAN_TYPES.map((t) => {
+              const Icon = t.icon
+              return (
                 <button
-                  key={m.key}
-                  onClick={() => setMode(m.key)}
-                  className={`text-xs font-medium px-3 py-1.5 rounded transition-colors ${
-                    mode === m.key ? 'bg-accent text-white' : 'text-slate-400 hover:text-slate-200'
+                  key={t.key}
+                  onClick={() => { if (!running) { setScanType(t.key); setError(null) } }}
+                  disabled={running}
+                  className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded transition-colors disabled:opacity-50 ${
+                    scanType === t.key ? 'bg-accent text-white' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  {m.label}
+                  <Icon size={13} /> {t.label}
                 </button>
-              ))}
-            </div>
-            <input
-              type="number" min="1" max="500"
-              className="input w-24 num" value={maxFiles}
-              onChange={(e) => setMaxFiles(e.target.value)}
-              aria-label="Max files" title="Хамгийн их файлын тоо"
-            />
-            {running ? (
-              <button onClick={stop} className="btn-primary justify-center !bg-critical hover:!bg-rose-500">
-                <Square size={14} /> Зогсоох
-              </button>
-            ) : (
-              <button onClick={scan} disabled={!path.trim()} className="btn-primary justify-center">
-                <Search size={15} /> Шинжлэх
-              </button>
-            )}
+              )
+            })}
           </div>
+
+          {scanType === 'code' ? (
+            <div className="flex flex-col md:flex-row gap-2">
+              <input
+                className="input flex-1 num"
+                placeholder="C:/Users/me/my-project   эсвэл   ./src"
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && start()}
+                aria-label="Scan path"
+              />
+              <div className="flex gap-1 bg-surface-900 border border-surface-600/60 rounded-lg p-1">
+                {MODES.map((m) => (
+                  <button
+                    key={m.key}
+                    onClick={() => setMode(m.key)}
+                    className={`text-xs font-medium px-3 py-1.5 rounded transition-colors ${
+                      mode === m.key ? 'bg-accent text-white' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="number" min="1" max="500"
+                className="input w-24 num" value={maxFiles}
+                onChange={(e) => setMaxFiles(e.target.value)}
+                aria-label="Max files" title="Хамгийн их файлын тоо"
+              />
+              {running ? (
+                <button onClick={stop} className="btn-primary justify-center !bg-critical hover:!bg-rose-500">
+                  <Square size={14} /> Зогсоох
+                </button>
+              ) : (
+                <button onClick={start} disabled={!path.trim()} className="btn-primary justify-center">
+                  <Search size={15} /> Шинжлэх
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex flex-col md:flex-row gap-2">
+                <input
+                  className="input flex-1 num"
+                  placeholder={
+                    scanType === 'web' ? 'https://example.com'
+                    : scanType === 'net' ? '192.168.1.0/24'
+                    : '127.0.0.1   эсвэл   192.168.1.10'
+                  }
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && start()}
+                  aria-label="Target"
+                />
+                <button onClick={start} disabled={running || !target.trim()} className="btn-primary justify-center">
+                  {running ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
+                  {running ? 'Шинжилж байна…' : 'Шинжлэх'}
+                </button>
+              </div>
+
+              {scanType === 'web' && (
+                <>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                      <input type="checkbox" checked={aiWeb} onChange={(e) => setAiWeb(e.target.checked)} />
+                      AI нэмэлт шинжилгээ
+                    </label>
+                    <button
+                      onClick={() => setShowAuth(!showAuth)}
+                      className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200"
+                    >
+                      <Lock size={12} /> Нэвтрэлт (authenticated scan)
+                      <ChevronDown size={13} className={`transition-transform ${showAuth ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
+                  {showAuth && (
+                    <div className="grid sm:grid-cols-3 gap-2 pt-1">
+                      <input className="input num text-xs" placeholder="Cookie: session=abc"
+                        value={cookie} onChange={(e) => setCookie(e.target.value)} aria-label="Cookie" />
+                      <input className="input num text-xs" placeholder="Header: Authorization: Bearer …"
+                        value={authHeader} onChange={(e) => setAuthHeader(e.target.value)} aria-label="Header" />
+                      <input className="input num text-xs" placeholder="Basic: user:pass"
+                        value={basic} onChange={(e) => setBasic(e.target.value)} aria-label="Basic auth" />
+                    </div>
+                  )}
+                </>
+              )}
+              {scanType === 'host' && (
+                <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer w-fit">
+                  <input type="checkbox" checked={authorized} onChange={(e) => setAuthorized(e.target.checked)} />
+                  <span>Би энэ target-г скан хийх <span className="text-high">зөвшөөрөлтэй</span> (public хаягт шаардлагатай)</span>
+                </label>
+              )}
+              {scanType === 'net' && (
+                <div className="flex items-center gap-3 flex-wrap">
+                  <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                    <input type="checkbox" checked={authorized} onChange={(e) => setAuthorized(e.target.checked)} />
+                    <span><span className="text-high">Зөвшөөрөлтэй</span> (public range-д шаардлагатай)</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                    <input type="checkbox" checked={quick} onChange={(e) => setQuick(e.target.checked)} />
+                    Хурдан (зөвхөн түгээмэл портууд)
+                  </label>
+                </div>
+              )}
+              <p className="text-[11px] text-slate-600">
+                {scanType === 'web'
+                  ? 'Зөвхөн өөрийн / зөвшөөрөлтэй сайт. Довтлох payload явуулахгүй — header/cookie/TLS/мэдээлэл задралт. Нэвтрэлт оруулбал нэвтэрсэн төлөвт гүн шалгана.'
+                  : scanType === 'net'
+                  ? 'CIDR range доторх амьд host, нээлттэй порт, OS таамаг (banner+TTL heuristic). Private default; public бол зөвшөөрөл. Exploit хийхгүй.'
+                  : 'Зөвхөн өөрийн / зөвшөөрөлтэй host. Стандарт TCP порт скан (exploit хийхгүй). Private/localhost default.'}
+              </p>
+            </div>
+          )}
+
           {error && (
             <p className="flex items-center gap-1.5 text-sm text-critical">
               <AlertTriangle size={14} /> {error}
             </p>
           )}
-          {running && progress && (
+          {running && scanType === 'code' && progress && (
             <ProgressBar done={progress.done} total={progress.total} file={progress.file} />
           )}
         </div>

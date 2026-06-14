@@ -97,6 +97,67 @@ python -m bughunter.cli scan <зам> --max-files 20 --json findings.json
 
 > CLI нь Critical/High алдаа олвол **exit code 1** буцаана — CI / pre-commit hook-д тохиромжтой.
 
+**False positive багасгах (`--verify`):** олдсон алдаа бүрийг дахин шалгаж, эргэлзээтэйг
+нь хаядаг хоёр дахь дамжуулалт. Чанар нэмэгдэх ч хугацаа/зардал ~2 дахин болно. Бүх
+скан дээр асаах бол `.env`-д `SCAN_VERIFY=1`.
+```powershell
+python -m bughunter.cli scan <зам> --verify
+```
+
+---
+
+## 4.5 Веб ба Хост скан (шинэ)
+
+> ⚠️ **Зөвхөн өөрийн эзэмшдэг эсвэл бичгээр зөвшөөрөл авсан target дээр ажиллуул.**
+> Зөвшөөрөлгүй host/сайт скан хийх нь ихэнх улсад **хууль бус**.
+
+### Веб скан (`web`) — довтлох биш, байдал шалгах
+Энгийн HTTP хүсэлт (браузертай адил) явуулж, сервер юу буцаахыг шинжилнэ: security
+header (HSTS, CSP, X-Frame-Options…), cookie флаг (Secure/HttpOnly/SameSite), TLS,
+сервер banner задралт, permissive CORS. **Payload, fuzzing, exploit явуулахгүй.**
+```powershell
+python -m bughunter.cli web https://example.com
+python -m bughunter.cli web https://miний-сайт.mn --ai   # LLM нэмэлт шинжилгээ
+```
+
+**Нэвтэрсэн төлөвт гүн шалгах (authenticated):** cookie/header/credentials оруулбал
+браузер шиг нэвтэрсэн төлөвт хүсэлт явуулж, нэвтэрсэн хуудаснуудыг шалгана (intrusive биш).
+```powershell
+python -m bughunter.cli web https://app.miний-сайт.mn --cookie "session=abc123"
+python -m bughunter.cli web https://api.miний-сайт.mn --header "Authorization: Bearer TOKEN"
+python -m bughunter.cli web https://miний-сайт.mn --basic "admin:нууцүг"
+```
+
+### Хост скан (`host`) — TCP порт/service скан
+Стандарт TCP connect скан (`nmap -sT`-тэй адил) + banner унших. **Exploit хийхгүй.**
+- **Private/localhost** (127.0.0.1, 192.168.x, 10.x…) — шууд зөвшөөрөгдөнө.
+- **Public хаяг** — `--authorized` тугтайгаар л ажиллана (зөвшөөрөлтэйгөө баталгаажуулна).
+```powershell
+python -m bughunter.cli host 127.0.0.1
+python -m bughunter.cli host 192.168.1.10 --ports 22,80,443,3306
+python -m bughunter.cli host миний-сервер.mn --authorized
+```
+Нээлттэй эрсдэлтэй порт (Telnet, ил DB, Docker API, RDP…)-ыг severity-тэйгээр илрүүлнэ.
+
+### Сүлжээ скан (`net`) — амьд host олох + OS таамаглах
+CIDR range доторх **бүх амьд host**-ыг олж, тус бүрийн нээлттэй порт/service болон
+**OS таамаг** (SSH/HTTP banner + `ping` TTL heuristic)-ийг гаргана. Raw socket /
+admin шаардахгүй, exploit хийхгүй. `nmap -sn` / `nmap -O`-той төстэй recon.
+```powershell
+python -m bughunter.cli net 192.168.1.0/24
+python -m bughunter.cli net 192.168.1.0/24 --quick        # зөвхөн түгээмэл портууд (хурдан)
+python -m bughunter.cli net 10.0.0.0/24 --authorized      # public/гадны range
+```
+- **Private/localhost** (192.168.x, 10.x, 127.x…) — шууд зөвшөөрөгдөнө.
+- **Public range** — `--authorized` тугтайгаар л.
+- ⚠️ OS таамаг бол **heuristic** — banner хуурамч байж болно, TTL зөвхөн ерөнхий
+  чиглэл өгнө. Найдвартай OS detection бол `nmap -O` (raw packet) хэрэгтэй.
+
+### Web UI-аас
+Дээд талын **Код / Веб / Хост / Сүлжээ** таб сонгоод target оруулна. Веб дээр
+"Нэвтрэлт" дарж cookie/header/credentials оруулж болно. Хост/сүлжээ дээр public бол
+"зөвшөөрөлтэй" чек тавина. Үр дүн ижил байдлаар severity-ээр харагдана.
+
 ---
 
 ## 5. Үр дүнг ойлгох
@@ -196,9 +257,12 @@ backend/bughunter/
   analyzer.py   # файл бүрийг загварт явуулж бүтэцлэгдсэн Finding[] цуглуулна (concurrent)
   provider.py   # LLM backend switch: Anthropic (cloud) | Ollama (локал)
   schemas.py    # Finding/ScanResult загвар + JSON schema
-  cli.py        # `python -m bughunter.cli scan <зам>` — өнгөт терминал тайлан
-  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE, live), GET /health
-frontend/       # React + Vite + Tailwind dashboard (/api -> :8000 proxy)
+  webscan.py    # веб байдал шалгах (header/cookie/TLS) — intrusive биш; authenticated сонголт
+  hostscan.py   # TCP порт/service скан — зөвшөөрлийн хаалгатай
+  netscan.py    # CIDR host discovery + порт + OS таамаг (banner+TTL) — зөвшөөрлийн хаалгатай
+  cli.py        # `python -m bughunter.cli {scan|web|host|net} <target>` — өнгөт тайлан
+  server.py     # FastAPI: POST /scan, GET /scan/stream (SSE), POST /web, POST /host, POST /net, GET /health
+frontend/       # React + Vite + Tailwind dashboard (/api -> :8000 proxy), Код/Веб/Хост/Сүлжээ таб
 ```
 
 `analyzer.py`-д `scan_path` (нэг удаагийн үр дүн, CLI/`POST /scan`-д) болон

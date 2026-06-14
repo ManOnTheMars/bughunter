@@ -13,6 +13,10 @@ from .schemas import Finding, ScanResult, ScanSummary, SEVERITY_ORDER
 from .scanner import collect_files, CollectedFile
 
 MAX_CONCURRENCY = int(os.getenv("SCAN_CONCURRENCY", "5"))
+# Optional second pass that re-checks candidate findings and drops false
+# positives. Doubles cost/latency, so it is off by default; enable with
+# SCAN_VERIFY=1 (or pass verify=True). Big precision win on weaker local models.
+VERIFY_DEFAULT = os.getenv("SCAN_VERIFY", "0") not in ("0", "", "false", "False")
 
 SYSTEM_PROMPT = """You are an elite code auditor combining two specialties:
 a security researcher (OWASP, CWE) and a senior engineer hunting correctness bugs.
@@ -32,7 +36,15 @@ Rules:
 - Cite the exact 1-based line number (use 0 only for genuinely file-level issues).
 - Severity reflects real-world impact: Critical = exploitable/data loss,
   High = serious bug, Medium = should fix, Low = minor.
-- Each finding needs a concrete, actionable recommendation."""
+- Each finding needs a concrete, actionable recommendation.
+
+Calibration (precision matters more than recall):
+- REPORT: `cur.execute("SELECT * FROM u WHERE id=" + req.id)` → SQL injection,
+  High, "use a parameterized query". Real, exploitable, concrete fix.
+- REPORT: `data[idx]` where `idx` can equal `len(data)` → off-by-one / index error.
+- DO NOT REPORT: a parameterized query, a constant compared to a constant, a
+  TODO comment, style/naming, or a "maybe unsafe if used wrongly" with no actual
+  unsafe usage in this file. When unsure whether it's truly reachable, omit it."""
 
 USER_TEMPLATE = """File: {path}
 Language: {lang}
@@ -56,7 +68,18 @@ def _number(text: str) -> str:
     return "\n".join(f"{i}| {line}" for i, line in enumerate(text.splitlines(), 1))
 
 
-async def analyze_file(cf: CollectedFile, categories: list[str]) -> list[Finding]:
+VERIFY_SYSTEM = """You are a strict reviewer double-checking another auditor's
+findings to eliminate false positives. For each candidate finding, re-read the
+code at the cited location and KEEP it only if the defect is genuinely real,
+correctly described, and reachable in this file. Drop anything speculative,
+duplicated, mis-located, or that depends on code not shown. You may correct an
+obviously wrong line number or severity, but do not invent new findings. Return
+the surviving findings (possibly an empty array)."""
+
+
+async def analyze_file(
+    cf: CollectedFile, categories: list[str], verify: bool = VERIFY_DEFAULT
+) -> list[Finding]:
     focus = (
         "Focus ONLY on security vulnerabilities."
         if categories == ["Security"]
@@ -64,14 +87,30 @@ async def analyze_file(cf: CollectedFile, categories: list[str]) -> list[Finding
         if categories == ["Logic"]
         else "Report both security and logic defects."
     )
+    numbered = _number(cf.text)
     user_msg = USER_TEMPLATE.format(
         path=cf.rel,
         lang=_LANG.get(cf.path.suffix.lower(), cf.path.suffix.lstrip(".")),
-        numbered=_number(cf.text),
+        numbered=numbered,
     )
     text = await complete_findings(SYSTEM_PROMPT + "\n\n" + focus, user_msg)
     raw = json.loads(text)["findings"]
+    if verify and raw:
+        raw = await _verify(cf.rel, numbered, raw)
     return [Finding(file=cf.rel, **item) for item in raw]
+
+
+async def _verify(rel: str, numbered: str, candidates: list[dict]) -> list[dict]:
+    """Second pass: keep only findings that survive a skeptical re-read."""
+    user_msg = (
+        f"File: {rel}\n\n```\n{numbered}\n```\n\nCandidate findings to verify:\n"
+        + json.dumps({"findings": candidates}, ensure_ascii=False, indent=2)
+    )
+    try:
+        text = await complete_findings(VERIFY_SYSTEM, user_msg)
+        return json.loads(text)["findings"]
+    except Exception:
+        return candidates  # verification is best-effort; never lose findings on error
 
 
 def _build_result(
@@ -102,6 +141,7 @@ async def scan_path(
     categories: list[str] | None = None,
     max_files: int | None = None,
     progress=None,
+    verify: bool = VERIFY_DEFAULT,
 ) -> ScanResult:
     categories = categories or ["Security", "Logic"]
     files, skipped = collect_files(root, max_files)
@@ -114,7 +154,7 @@ async def scan_path(
         nonlocal done
         async with sem:
             try:
-                result = await analyze_file(cf, categories)
+                result = await analyze_file(cf, categories, verify)
             except Exception as e:  # one bad file shouldn't kill the scan
                 result = []
                 if progress:
@@ -133,6 +173,7 @@ async def scan_stream(
     categories: list[str] | None = None,
     max_files: int | None = None,
     is_disconnected=None,
+    verify: bool = VERIFY_DEFAULT,
 ):
     """Async generator yielding scan events as they happen.
 
@@ -152,7 +193,7 @@ async def scan_stream(
     async def run(cf: CollectedFile):
         async with sem:
             try:
-                result = await analyze_file(cf, categories)
+                result = await analyze_file(cf, categories, verify)
                 await queue.put((cf.rel, result, None))
             except asyncio.CancelledError:
                 raise
